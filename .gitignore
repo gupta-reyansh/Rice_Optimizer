@@ -175,3 +175,4 @@ lightning_logs/
 # PyTorch model weights
 *.pth
 *.pt
+epoch_4.ckpt
