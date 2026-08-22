@@ -1,6 +1,6 @@
 ﻿# Rice Optimizer
 
-Rice Optimizer is a computational project that uses a rice-adapted CodonTransformer model to design bacterial *nifH* DNA sequences for potential expression in rice (*Oryza sativa*). The model takes a NifH protein sequence and predicts a DNA sequence that preserves the encoded protein while better reflecting codon usage patterns learned from rice coding sequences.
+Rice Optimizer is a computational project that uses a rice-adapted CodonTransformer model (adibvafa fallahpour) to design bacterial *nifH* DNA sequences for potential expression in rice (*Oryza sativa*). The model takes a NifH protein sequence and predicts a DNA sequence that preserves the encoded protein while better reflecting codon usage patterns learned from rice coding sequences.
 
 This project was developed as a science fair project and may also support future research work. It does not claim that an optimized sequence will be expressed successfully or that it will make rice nitrogen-fixing.
 
