@@ -1,31 +1,15 @@
-![Uploading Gemini_Generated_Image_5kvhi95kvhi95kvh.jpg…]()
-<img width="1024" height="559" alt="9e13abf6-ba64-4879-88a7-1bb6623e61ea" src="https://github.com/user-attachments/assets/2c4bb9da-6008-48ec-a711-2aa2fdefebda" />
-﻿# Rice Optimizer
+# Rice Optimizer
 
 Rice Optimizer is a computational project that uses a rice-adapted CodonTransformer model to design bacterial *nifH* DNA sequences for potential expression in rice (*Oryza sativa*). The model takes a NifH protein sequence and predicts a DNA sequence that preserves the encoded protein while better reflecting codon usage patterns learned from rice coding sequences.
 
 This project was developed as a science fair project and may also support future research work. It does not claim that an optimized sequence will be expressed successfully or that it will make rice nitrogen-fixing.
 
-## Intended Audience
-
-The primary audience is researchers in plant science, synthetic biology, computational biology, crop biotechnology, and biological nitrogen fixation.
-
 ## How It Works
 
 The project extends a pretrained CodonTransformer model to support rice as a target organism. The model was fine-tuned using rice coding sequences and then used to predict DNA sequences for bacterial *nifH* protein sequences.
 
-```text
-Bacterial NifH protein
-	   |
-	   v
-   Protein tokenization
-	   |
-	   v
-   Rice-adapted CodonTransformer
-	   |
-	   v
-   Predicted rice-compatible DNA
-```
+![Uploading Gemini_Generated_Image_5kvhi95kvhi95kvh.jpg…]()
+<img width="1024" height="559" alt="9e13abf6-ba64-4879-88a7-1bb6623e61ea" src="https://github.com/user-attachments/assets/2c4bb9da-6008-48ec-a711-2aa2fdefebda" />
 
 The model uses sequence context rather than selecting codons independently at each position. This allows the prediction to reflect patterns learned from complete coding sequences.
 
@@ -35,8 +19,9 @@ The training data came from the [Ensembl Plants *Oryza sativa* cDNA dataset](htt
 
 The sequences were prepared by:
 
-- Removing small sequences.
+- Removing small sequences(<300 bp).
 - Keeping sequences with valid start and stop codons.
+- Keeping sequences with bp length divisible by 3
 - Keeping sequences with a transfer RNA adaptation index (tAI) above 0.4.
 
 ## Installation
