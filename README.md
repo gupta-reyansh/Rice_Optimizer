@@ -58,3 +58,9 @@ The batch workflow uses [ModelTest/test_data.csv](ModelTest/test_data.csv) as in
 ## License
 
 This project is distributed under the terms of the license in [LICENSE](LICENSE).
+
+## Citations
+
+Fallahpour, Adibvafa, et al. "CodonTransformer: A Multispecies Codon Optimizer Using Context-Aware Neural Networks." Nature Communications, vol. 16, no. 1, Apr. 2025, p. 3205, https://doi.org/10.1038/s41467-025-58588-7.
+
+Missall. “GitHub - Missall999/CodonTransformer: CodonTransformer (1M+ Downloads); the Tool for Codon Optimization, Optimizing DNA for Protein Expression.” GitHub, github.com/missall999/CodonTransformer.
