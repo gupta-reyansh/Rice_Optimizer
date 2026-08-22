@@ -1,4 +1,4 @@
-# Technical Guide to Retraining and Model Outputs for a Single Species
+# Technical Guide to Retraining Model for a Single Species
 
 ---
 
