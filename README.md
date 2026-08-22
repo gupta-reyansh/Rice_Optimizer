@@ -23,33 +23,11 @@ The sequences were prepared by:
 - Keeping sequences with bp length divisible by 3
 - Keeping sequences with a transfer RNA adaptation index (tAI) above 0.4.
 
-## Installation
-
-Create and activate a Python environment, then install the required packages:
-
-```powershell
-pip install -r requirements.txt
-```
-
 ## Making Predictions
 
 Use [CodonTransformerDemo.ipynb](CodonTransformerDemo.ipynb) to make predictions. The notebook includes single-sequence and batch prediction workflows.
 
 The batch workflow uses [ModelTest/test_data.csv](ModelTest/test_data.csv) as input and writes predictions to [ModelTest/model_predictions.csv](ModelTest/model_predictions.csv). The prediction output includes a `predicted_dna` column.
-
-## Training a Species Model
-
-The [train_species_model.py](train_species_model.py) script shows the training method used to prepare and train a single-species model from a CDS FASTA file. Researchers can adapt it for another organism or training dataset.
-
-```powershell
-python train_species_model.py --input_fasta <CDS_FASTA> --organism "<organism>"
-```
-
-The script filters and prepares the FASTA records, creates training data, and launches the training workflow. Additional options are available through:
-
-```powershell
-python train_species_model.py --help
-```
 
 ## Evaluation
 
