@@ -1,31 +1,8 @@
 # Technical Guide to Retraining and Model Outputs for a Single Species
 
-This document explains how to generate training inputs directly from a CDS FASTA file and perform **from-scratch retraining (retraining / pretraining from scratch)** for a single species. It covers environment setup, input requirements, one-command script usage, the manual step-by-step process, and common troubleshooting.
-
 ---
 
-## 1. Scope and Limitations
-
-### 1.1 Applicable Scenarios
-
-This document applies to the following scenarios:
-
-1. The training target is a single species trained from scratch, rather than continuing fine-tuning from a Hugging Face base model.
-2. The original input is a CDS FASTA file for the target species, or a gene-level CDS sequence collection that has already been organized.
-3. The target species does not need to be included in the global `ORGANISM2ID` mapping in `/home/runner/work/CodonTransformer/CodonTransformer/CodonTransformer/CodonUtils.py`.
-
-### 1.2 Not Covered
-
-This document does not directly cover **permanently adding a new species to the repository's default inference interface**. The current default inference process still depends on a fixed species mapping:
-
-1. The public base model and default inference entry point are designed around the existing `ORGANISM2ID`.
-2. If a new species must be permanently added to the public multispecies model and default inference interface, the species mapping and related configuration must also be modified.
-
-Therefore, the one-command script described here solves the problem of **single-species training from scratch**, rather than permanently expanding the repository's public multispecies model definition.
-
----
-
-## 2. Overview of the Current Training Logic
+## 1. Overview of the Current Training Logic
 
 The formal input for single-species retraining is not a FASTA file, but two intermediate outputs:
 
@@ -44,21 +21,20 @@ Unlike the previous single-species fine-tuning process, the current one-command 
 
 ---
 
-## 3. Environment Setup
+## 2. Environment Setup
 
-### 3.1 Basic Software Requirements
+### 2.1 Basic Software Requirements
 
 - Python `>=3.9`
 - `pip`
 - An available CUDA / GPU training environment (`pretrain.py` currently requires GPU acceleration)
 - If a local tokenizer file is not provided, network access to the Hugging Face tokenizer repository
 
-### 3.2 Recommended Setup
+### 2.2 Recommended Setup
 
-Run the following commands from the repository root `/home/runner/work/CodonTransformer/CodonTransformer`:
+Run the following commands:
 
 ```bash
-cd /home/runner/work/CodonTransformer/CodonTransformer
 
 python -m venv .venv
 source .venv/bin/activate
@@ -68,12 +44,11 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-### 3.3 Environment Verification
+### 2.3 Environment Verification
 
-Run the following command to verify that the key dependencies are available:
+Run the following command to verify that the dependencies are available:
 
 ```bash
-python - <<'PY'
 import Bio
 import pandas
 import torch
@@ -84,32 +59,29 @@ print("Biopython:", Bio.__version__)
 print("pandas:", pandas.__version__)
 print("torch:", torch.__version__)
 print("Environment check passed.")
-PY
 ```
 
-### 3.4 GPU Verification
+### 2.4 GPU Verification
 
 You should also confirm that PyTorch can detect a GPU:
 
 ```bash
-python - <<'PY'
 import torch
 print("CUDA available:", torch.cuda.is_available())
 print("CUDA device count:", torch.cuda.device_count())
-PY
 ```
 
 If `torch.cuda.is_available()` returns `False`, `pretrain.py` cannot start training with its default configuration.
 
 ---
 
-## 4. Input Data Requirements
+## 3. Input Data Requirements
 
-### 4.1 Input File Type
+### 3.1 Input File Type
 
 The one-command training script accepts a **CDS FASTA** file as its raw input. Each record should represent a gene-level CDS rather than an entire chromosome, contig, or scaffold.
 
-### 4.2 Sequence Quality Requirements
+### 3.2 Sequence Quality Requirements
 
 The input data should ideally meet the following requirements:
 
@@ -119,39 +91,9 @@ The input data should ideally meet the following requirements:
 4. The dataset should avoid internal abnormal stop codons, low-quality annotations, and obvious assembly errors whenever possible.
 5. If the FASTA file contains many incomplete or incorrectly translated sequences, clean the data before training.
 
-### 4.3 Species Name Requirements
 
-The input species name is written to the training data and run metadata. For the one-command retraining process, it **does not** need to exist in the global `ORGANISM2ID` mapping. The script automatically removes leading and trailing whitespace and maps the species to the local organism ID `0` for this training run.
 
-Examples:
-
-- `Fragaria vesca`
-- `Escherichia coli general`
-- `Homo sapiens`
-
-If the trained model will later be connected to the repository's default inference interface, the global species mapping issue must still be addressed.
-
-### 4.4 Codon Table Requirements
-
-By default, `read_fasta_file(...)` infers the NCBI codon table used for translation from the species name. For new or unlisted species, explicitly specify the codon table using the one-command script's `--codon_table` parameter to avoid incorrect translation. For example, nuclear genes in plants commonly use table `1`, while most bacteria use table `11`.
-
-### 4.5 Additional Information Such as Expression, FPKM, and TPM
-
-The current `prepare_training_data(...)` function uses only the following three columns:
-
-- `dna`
-- `protein`
-- `organism`
-
-Therefore, fields such as FPKM, TPM, tissue source, and treatment conditions are not directly included in the model input. They can be used for sample filtering, but they are not directly modeled by the current training script.
-
----
-
-## 5. One-Command Retraining Script
-
-The repository root script is:
-
-`/home/runner/work/CodonTransformer/CodonTransformer/train_species_model.py`
+## 4. One-Command Retraining Script
 
 This script performs the following steps:
 
@@ -163,32 +105,27 @@ This script performs the following steps:
 6. Calls `pretrain.py` to start training from scratch.
 7. Saves intermediate files, training metadata, and checkpoints in the working directory.
 
-### 5.1 Minimal Command
+### 4.1 Minimal Command
 
 ```bash
 cd /home/runner/work/CodonTransformer/CodonTransformer
 
 python train_species_model.py \
   --input_fasta "/absolute/path/to/species_cds.fasta" \
-  --organism "Fragaria vesca" \
+  --organism "Oryza sativa" \
   --codon_table 1
 ```
 
 With this usage, the script automatically creates the default working directory:
 
-```text
-/home/runner/work/CodonTransformer/CodonTransformer/workflows/fragaria_vesca/
-```
-
-### 5.2 Common Command
+### 4.2 Common Command
 
 ```bash
-cd /home/runner/work/CodonTransformer/CodonTransformer
 
 python train_species_model.py \
   --input_fasta "/absolute/path/to/species_cds.fasta" \
-  --organism "Fragaria vesca" \
-  --work_dir "/absolute/path/to/workflows/fragaria_vesca_run01" \
+  --organism "Oryza sativa" \
+  --work_dir "/absolute/path/to/workflows/Oryza_sativa_run01" \
   --codon_table 1 \
   --batch_size 1 \
   --max_epochs 5 \
@@ -200,19 +137,19 @@ python train_species_model.py \
   --seed 123
 ```
 
-### 5.3 Retaining Records with `correct_seq=False`
+### 4.3 Retaining Records with `correct_seq=False`
 
 ```bash
 python train_species_model.py \
   --input_fasta "/absolute/path/to/species_cds.fasta" \
-  --organism "Fragaria vesca" \
+  --organism "Oryza sativa" \
   --codon_table 1 \
   --keep_all_records
 ```
 
 > Enable `--keep_all_records` only if you clearly understand the risks associated with data quality.
 
-### 5.4 Script Parameter Description
+### 4.4 Script Parameter Description
 
 | Parameter | Description | Default |
 |---|---|---|
@@ -235,7 +172,7 @@ python train_species_model.py \
 
 ---
 
-## 6. One-Command Script Output Structure
+## 5. One-Command Script Output Structure
 
 By default, the working directory will contain the following:
 
@@ -266,64 +203,24 @@ The files have the following meanings:
 
 ---
 
-## 7. Manual Step-by-Step Process
 
-If you do not use the one-command script, you can perform the process manually:
+## 6. Common Troubleshooting
 
-1. Use `read_fasta_file(...)` to extract `dna/protein/organism` from the FASTA file.
-2. Filter invalid records and export the training CSV.
-3. Call `prepare_training_data(..., organism_to_id={target_species: 0})` to generate the training JSONL.
-4. Start training with `pretrain.py --train_data_path ... --type_vocab_size 1`.
-
-Example:
-
-```python
-from CodonTransformer.CodonData import prepare_training_data, read_fasta_file
-
-species = "Fragaria vesca"
-df = read_fasta_file(
-    input_file="/absolute/path/to/species_cds.fasta",
-    organism=species,
-    codon_table=1,
-)
-df = df[df["correct_seq"]].copy()
-df = df[["dna", "protein"]].copy()
-df["organism"] = species
-prepare_training_data(
-    dataset=df,
-    output_file="/absolute/path/to/training_data.json",
-    organism_to_id={species: 0},
-)
-```
-
-Then run:
-
-```bash
-python pretrain.py \
-  --train_data_path "/absolute/path/to/training_data.json" \
-  --checkpoint_dir "/absolute/path/to/checkpoints" \
-  --type_vocab_size 1
-```
-
----
-
-## 8. Common Troubleshooting
-
-### 8.1 Leading or Trailing Spaces in `--organism`
+### 6.1 Leading or Trailing Spaces in `--organism`
 
 The script automatically applies `strip()` to `--organism`. For example:
 
 ```bash
---organism "Fragaria vesca "
+--organism "Oryza sativa "
 ```
 
 is normalized to:
 
 ```text
-Fragaria vesca
+Oryza sativa
 ```
 
-### 8.2 Incorrect Translation Results for a New Species
+### 6.2 Incorrect Translation Results for a New Species
 
 If the target species is not accurately covered by the built-in codon table inference rules, explicitly specify:
 
@@ -333,24 +230,12 @@ If the target species is not accurately covered by the built-in codon table infe
 
 or another correct NCBI codon table number.
 
-### 8.3 `Invalid organism name` or Global Species Mapping Errors
+### 6.3 Tests Failing Before Training
 
-The one-command retraining process no longer requires the target species to already exist in the global `ORGANISM2ID` mapping. If you still see this type of error, you are probably running an older version of `train_species_model.py`, or you are calling the default multispecies inference or old fine-tuning process.
+The repository's existing tests depend on packages such as `pandas`, `torch`, and `ipywidgets`. If the tests fail during import, install requirements.txt
 
-### 8.4 Tests Failing Before Training
-
-The repository's existing tests depend on packages such as `pandas`, `torch`, and `ipywidgets`. If the tests fail during import, first run:
-
-```bash
-pip install -r /home/runner/work/CodonTransformer/CodonTransformer/requirements.txt
-```
-
-### 8.5 No GPU Available
+### 6.4 No GPU Available
 
 The current `pretrain.py` uses a GPU trainer configuration. If no GPU is available, the underlying training script must be adjusted before CPU training can be performed.
 
 ---
-
-## 9. Conclusion
-
-The current repository's `train_species_model.py` is now designed for **single-species retraining** rather than **single-species fine-tuning**. For a new species such as `Fragaria vesca` that is not included in the global `ORGANISM2ID` mapping, training can be started directly from a CDS FASTA file, with the correct translation rules specified using `--codon_table`. If the new species must later be permanently included in the repository's default inference interface, the global species mapping and related inference configuration must also be extended.
