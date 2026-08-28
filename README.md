@@ -6,7 +6,7 @@ This project was developed as a science fair project and may also support future
 
 ## How It Works
 
-The project extends a pretrained CodonTransformer model to support rice as a target organism. The model was retrained using just rice coding sequences and then used to predict DNA sequences for bacterial *nifH* protein sequences.
+The project extends a pretrained CodonTransformer model to support rice as a target organism. The model was fine-tuned using rice coding sequences and then used to predict DNA sequences for bacterial *nifH* protein sequences.
 
 <img width="453" height="686" alt="Gemini_Generated_Image_5kvhi95kvhi95kvh" src="https://github.com/user-attachments/assets/b63e7979-22b9-4aa3-aff8-3ca1c4c05d44" />
 
