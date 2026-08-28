@@ -176,3 +176,4 @@ lightning_logs/
 *.pth
 *.pt
 epoch_4.ckpt
+SingleSpeciesRetrainingGuide.md
