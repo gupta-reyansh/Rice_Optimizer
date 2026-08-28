@@ -147,7 +147,8 @@ class DumpStateDict(pl.callbacks.ModelCheckpoint):
         self.checkpoint_filename = checkpoint_filename
 
     def on_save_checkpoint(self, trainer, pl_module, checkpoint):
-        model = trainer.model.model
+        wrapped_model = getattr(trainer.model, "module", trainer.model)
+        model = getattr(wrapped_model, "model", wrapped_model)
         torch.save(
             model.state_dict(), os.path.join(self.dirpath, self.checkpoint_filename)
         )
