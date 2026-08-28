@@ -10,8 +10,14 @@ dataset and use this script.
 """
 
 import argparse
+import csv
 import os
+from pathlib import Path
 
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader
@@ -147,6 +153,65 @@ class DumpStateDict(pl.callbacks.ModelCheckpoint):
         )
 
 
+class LossHistoryPlotter(pl.Callback):
+    def __init__(self, output_dir, csv_filename="training_loss_history.csv"):
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.csv_path = self.output_dir / csv_filename
+        self.png_path = self.output_dir / "training_loss_history.png"
+        self.history = []
+
+    def add_loss(self, step, loss):
+        if step is None or loss is None:
+            return
+        self.history.append({"step": int(step), "loss": float(loss)})
+        self._save_csv()
+        self._save_plot()
+
+    def _save_csv(self):
+        with self.csv_path.open("w", newline="", encoding="utf-8") as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(["step", "loss"])
+            for row in self.history:
+                writer.writerow([row["step"], row["loss"]])
+
+    def _save_plot(self):
+        if not self.history:
+            return
+
+        steps = [entry["step"] for entry in self.history]
+        losses = [entry["loss"] for entry in self.history]
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(steps, losses, color="tab:blue", linewidth=2)
+        ax.set_title("Training Loss Over Time")
+        ax.set_xlabel("Training Step")
+        ax.set_ylabel("Loss")
+        ax.grid(True, alpha=0.25)
+        fig.tight_layout()
+        fig.savefig(self.png_path, dpi=150)
+        plt.close(fig)
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        loss = trainer.callback_metrics.get("loss")
+        if loss is None:
+            if hasattr(outputs, "loss"):
+                loss = outputs.loss
+            elif isinstance(outputs, dict) and "loss" in outputs:
+                loss = outputs["loss"]
+
+        if loss is None:
+            return
+
+        if hasattr(loss, "detach"):
+            loss = loss.detach().cpu()
+        self.add_loss(trainer.global_step, float(loss))
+
+    def on_train_end(self, trainer, pl_module):
+        self._save_csv()
+        self._save_plot()
+
+
 def main(args):
     """Finetune the CodonTransformer model."""
     pl.seed_everything(args.seed)
@@ -173,6 +238,7 @@ def main(args):
         checkpoint_filename=args.checkpoint_filename,
         every_n_train_steps=args.save_every_n_steps,
     )
+    loss_plotter = LossHistoryPlotter(output_dir=args.checkpoint_dir)
     trainer = pl.Trainer(
         default_root_dir=args.checkpoint_dir,
         strategy="ddp_find_unused_parameters_true",
@@ -182,12 +248,14 @@ def main(args):
         max_epochs=args.max_epochs,
         deterministic=False,
         enable_checkpointing=True,
-        callbacks=[save_checkpoint],
+        callbacks=[save_checkpoint, loss_plotter],
         accumulate_grad_batches=args.accumulate_grad_batches,
     )
 
     # Finetune the model
     trainer.fit(harnessed_model, data_loader)
+    print(f"Loss history CSV: {os.path.join(args.checkpoint_dir, 'training_loss_history.csv')}")
+    print(f"Loss plot: {os.path.join(args.checkpoint_dir, 'training_loss_history.png')}")
 
 
 if __name__ == "__main__":
