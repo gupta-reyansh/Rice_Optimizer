@@ -1,5 +1,5 @@
 """
-Train a single-species CodonTransformer model from scratch directly from a CDS FASTA file.
+Fine-tune the CodonTransformer model for a single species directly from a CDS FASTA file.
 """
 
 import argparse
@@ -85,17 +85,17 @@ def prepare_pretrain_inputs(
     return parsed_df, training_df, training_csv_path, training_json_path
 
 
-def run_pretrain(
+def run_finetune(
     training_json_path: Path, checkpoint_dir: Path, args: argparse.Namespace
 ) -> None:
-    from finetune import main as pretrain_main
+    from finetune import main as finetune_main
 
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    pretrain_args = argparse.Namespace(
-        tokenizer_path=args.tokenizer_path,
-        train_data_path=str(training_json_path),
+    finetune_args = argparse.Namespace(
+        dataset_dir=str(training_json_path),
         checkpoint_dir=str(checkpoint_dir),
+        checkpoint_filename=args.checkpoint_filename,
         batch_size=args.batch_size,
         max_epochs=args.max_epochs,
         num_workers=args.num_workers,
@@ -103,12 +103,11 @@ def run_pretrain(
         num_gpus=args.num_gpus,
         learning_rate=args.learning_rate,
         warmup_fraction=args.warmup_fraction,
-        save_interval=args.save_interval,
+        save_every_n_steps=args.save_every_n_steps,
         seed=args.seed,
-        type_vocab_size=1,
         debug=args.debug,
     )
-    pretrain_main(pretrain_args)
+    finetune_main(finetune_args)
 
 
 def write_run_metadata(
@@ -142,67 +141,41 @@ def write_run_metadata(
 
 
 def parse_args() -> argparse.Namespace:
-        parser = argparse.ArgumentParser(description="Finetune the CodonTransformer model.")
-        parser.add_argument(
-            "--dataset_dir",
-            type=str,
-            required=True,
-            help="Directory containing the dataset",
-        )
-        parser.add_argument(
-            "--checkpoint_dir",
-            type=str,
-            required=True,
-            help="Directory where checkpoints will be saved",
-        )
-        parser.add_argument(
-            "--checkpoint_filename",
-            type=str,
-            default="finetune.ckpt",
-            help="Filename for the saved checkpoint",
-        )
-        parser.add_argument(
-            "--batch_size", type=int, default=6, help="Batch size for training"
-        )
-        parser.add_argument(
-            "--max_epochs", type=int, default=15, help="Maximum number of epochs to train"
-        )
-        parser.add_argument(
-            "--num_workers", type=int, default=5, help="Number of workers for data loading"
-        )
-        parser.add_argument(
-            "--accumulate_grad_batches",
-            type=int,
-            default=1,
-            help="Number of batches to accumulate gradients",
-        )
-        parser.add_argument(
-            "--num_gpus", type=int, default=4, help="Number of GPUs to use for training"
-        )
-        parser.add_argument(
-            "--learning_rate",
-            type=float,
-            default=5e-5,
-            help="Learning rate for the optimizer",
-        )
-        parser.add_argument(
-            "--warmup_fraction",
-            type=float,
-            default=0.1,
-            help="Fraction of total steps to use for warmup",
-        )
-        parser.add_argument(
-            "--save_every_n_steps",
-            type=int,
-            default=512,
-            help="Save checkpoint every N steps",
-        )
-        parser.add_argument(
-            "--seed", type=int, default=123, help="Random seed for reproducibility"
-        )
-        parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-        args = parser.parse_args()
-        return parser.parse_args()
+    parser = argparse.ArgumentParser(
+        description="Run the single-species CodonTransformer fine-tuning pipeline from a CDS FASTA file."
+    )
+    parser.add_argument("--input_fasta", required=True, help="Path to the CDS FASTA file.")
+    parser.add_argument("--organism", required=True, help="Target organism name.")
+    parser.add_argument(
+        "--work_dir",
+        default="",
+        help="Working directory. Defaults to <repo_root>/workflows/<organism_slug>.",
+    )
+    parser.add_argument(
+        "--tokenizer_path",
+        default="",
+        help="Recorded tokenizer path for metadata; finetune.py loads its configured tokenizer.",
+    )
+    parser.add_argument("--codon_table", type=int, default=None)
+    parser.add_argument(
+        "--keep_all_records",
+        action="store_true",
+        help="Keep records flagged as incorrect_seq.",
+    )
+    parser.add_argument(
+        "--checkpoint_filename", default="finetune.ckpt", help="Saved checkpoint filename."
+    )
+    parser.add_argument("--batch_size", type=int, default=6)
+    parser.add_argument("--max_epochs", type=int, default=15)
+    parser.add_argument("--num_workers", type=int, default=5)
+    parser.add_argument("--accumulate_grad_batches", type=int, default=1)
+    parser.add_argument("--num_gpus", type=int, default=1)
+    parser.add_argument("--learning_rate", type=float, default=5e-5)
+    parser.add_argument("--warmup_fraction", type=float, default=0.1)
+    parser.add_argument("--save_every_n_steps", type=int, default=512)
+    parser.add_argument("--seed", type=int, default=123)
+    parser.add_argument("--debug", action="store_true")
+    return parser.parse_args()
 
 
 def main() -> None:
@@ -233,18 +206,18 @@ def main() -> None:
     )
 
     print(f"Parsed FASTA records: {len(parsed_df)}")
-    print(f"Selected records for retraining: {len(training_df)}")
+    print(f"Selected records for fine-tuning: {len(training_df)}")
     print(f"Training CSV: {training_csv_path}")
     print(f"Training JSON: {training_json_path}")
     print(f"Run metadata: {metadata_path}")
 
-    run_pretrain(
+    run_finetune(
         training_json_path=training_json_path,
         checkpoint_dir=checkpoint_dir,
         args=args,
     )
 
-    print(f"Retraining completed. Checkpoints are available in {checkpoint_dir}")
+    print(f"Fine-tuning completed. Checkpoints are available in {checkpoint_dir}")
 
 
 if __name__ == "__main__":
