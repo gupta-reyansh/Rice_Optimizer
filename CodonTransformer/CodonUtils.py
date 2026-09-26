@@ -154,6 +154,10 @@ TOKEN2INDEX: Dict[str, int] = {
 # Index-to-token mapping, reverse of TOKEN2INDEX
 INDEX2TOKEN: Dict[int, str] = {i: c for c, i in TOKEN2INDEX.items()}
 
+# Indices of codon tokens whose codon contains a G or C nucleotide (used for GC-content control)
+G_indices = [idx for token, idx in TOKEN2INDEX.items() if "g" in token.split("_")[-1]]
+C_indices = [idx for token, idx in TOKEN2INDEX.items() if "c" in token.split("_")[-1]]
+
 # Dictionary mapping each amino acid and stop symbol to indices of codon tokens that translate to it
 AMINO_ACID_TO_INDEX = {
     aa: sorted(
