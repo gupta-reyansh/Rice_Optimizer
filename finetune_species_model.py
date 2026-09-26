@@ -15,6 +15,28 @@ from CodonTransformer.CodonData import prepare_training_data, read_fasta_file
 
 REPO_ROOT = Path(__file__).resolve().parent
 
+# Options this wrapper forwards unchanged to finetune.main.
+FINETUNE_PASSTHROUGH = (
+    "checkpoint_filename",
+    "batch_size",
+    "max_epochs",
+    "num_workers",
+    "accumulate_grad_batches",
+    "num_gpus",
+    "learning_rate",
+    "warmup_fraction",
+    "save_every_n_steps",
+    "seed",
+    "debug",
+    "gc_penalty_weight",
+    "gc_target",
+    "gc3_target",
+    "gc_tolerance",
+    "gc_temperature",
+    "curriculum_epochs",
+    "use_lagrangian",
+)
+
 
 def slugify(value: str) -> str:
     slug = re.sub(r"[^0-9A-Za-z]+", "_", value).strip("_").lower()
@@ -88,25 +110,17 @@ def prepare_pretrain_inputs(
 def run_finetune(
     training_json_path: Path, checkpoint_dir: Path, args: argparse.Namespace
 ) -> None:
-    from finetune import main as finetune_main
+    from finetune import build_parser, main as finetune_main
 
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    finetune_args = argparse.Namespace(
-        dataset_dir=str(training_json_path),
-        checkpoint_dir=str(checkpoint_dir),
-        checkpoint_filename=args.checkpoint_filename,
-        batch_size=args.batch_size,
-        max_epochs=args.max_epochs,
-        num_workers=args.num_workers,
-        accumulate_grad_batches=args.accumulate_grad_batches,
-        num_gpus=args.num_gpus,
-        learning_rate=args.learning_rate,
-        warmup_fraction=args.warmup_fraction,
-        save_every_n_steps=args.save_every_n_steps,
-        seed=args.seed,
-        debug=args.debug,
+    # Start from finetune.py's own defaults (ALM settings, log interval, ...), then override
+    # with everything this wrapper exposes, so the two scripts cannot drift apart.
+    finetune_args = build_parser().parse_args(
+        ["--dataset_dir", str(training_json_path), "--checkpoint_dir", str(checkpoint_dir)]
     )
+    for name in FINETUNE_PASSTHROUGH:
+        setattr(finetune_args, name, getattr(args, name))
     finetune_main(finetune_args)
 
 
@@ -175,6 +189,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save_every_n_steps", type=int, default=512)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--debug", action="store_true")
+
+    # GC control (see finetune.py). Defaults match finetune.py; a weight of 0 leaves it off.
+    parser.add_argument("--gc_penalty_weight", type=float, default=0.0)
+    parser.add_argument("--gc_target", type=float, default=0.4361)
+    parser.add_argument("--gc3_target", type=float, default=None)
+    parser.add_argument("--gc_tolerance", type=float, default=0.02)
+    parser.add_argument("--gc_temperature", type=float, default=1.0)
+    parser.add_argument("--curriculum_epochs", type=int, default=3)
+    parser.add_argument("--use_lagrangian", action="store_true")
     return parser.parse_args()
 
 

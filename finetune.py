@@ -69,6 +69,8 @@ class MaskedTokenizerCollator:
 
         tokenized["input_ids"] = inputs
         tokenized["labels"] = torch.where(selected, targets, -100)
+        # Unmasked codon ids, used by the GC loss to rebuild the fully-masked (inference) input.
+        tokenized["original_ids"] = targets
 
         return tokenized
 
@@ -76,6 +78,11 @@ class MaskedTokenizerCollator:
 class plTrainHarness(pl.LightningModule):
     """
     PyTorch Lightning training harness for the rice CodonTransformer with Augmented-Lagrangian Method (ALM) GC control.
+
+    GC is measured under inference conditions: a second forward pass masks every codon down to its
+    amino acid, and the expected GC is taken over the synonymous codons only (renormalised), per
+    sequence. This is the same quantity that decoding produces, so the penalty cannot be reduced by
+    moving probability between amino acids or by copying visible codons.
 
     This class implements the training loop for fine-tuning CodonTransformer on rice sequences
     with precise GC content control using an Augmented-Lagrangian Method. The ALM approach allows
@@ -109,12 +116,17 @@ class plTrainHarness(pl.LightningModule):
         alm_rel_penalty_increase_threshold: Relative improvement threshold for penalty updates (default: 0.1)
         alm_max_penalty: Maximum penalty value to prevent ill-conditioning (default: 1e6)
         alm_min_penalty: Minimum penalty value (default: 1e-6)
+        gc3_target: Optional target for GC at the third codon position (default: None = not enforced)
+        gc_tolerance: Half-width of the no-penalty band around the GC targets (default: 0.02)
+        gc_temperature: Softmax temperature used only when measuring GC. Below 1 sharpens the
+            distribution toward its mode, approximating argmax decoding (default: 1.0)
     """
     def __init__(self, model, learning_rate, warmup_fraction, gc_penalty_weight, tokenizer,
                  gc_target=0.4361, use_lagrangian=False, lagrangian_rho=10.0, curriculum_epochs=3,
                  alm_tolerance=1e-5, alm_dual_tolerance=1e-5, alm_penalty_update_factor=10.0,
                  alm_initial_penalty_factor=20.0, alm_tolerance_update_factor=0.1,
-                 alm_rel_penalty_increase_threshold=0.1, alm_max_penalty=1e6, alm_min_penalty=1e-6):
+                 alm_rel_penalty_increase_threshold=0.1, alm_max_penalty=1e6, alm_min_penalty=1e-6,
+                 gc3_target=None, gc_tolerance=0.02, gc_temperature=1.0):
         super().__init__()
         self.model = model
         self.learning_rate = learning_rate
@@ -124,6 +136,9 @@ class plTrainHarness(pl.LightningModule):
 
         # Augmented-Lagrangian GC Control parameters
         self.gc_target = gc_target
+        self.gc3_target = gc3_target
+        self.gc_tolerance = gc_tolerance
+        self.gc_temperature = gc_temperature
         self.use_lagrangian = use_lagrangian
         self.lagrangian_rho = lagrangian_rho
         self.curriculum_epochs = curriculum_epochs
@@ -164,26 +179,58 @@ class plTrainHarness(pl.LightningModule):
         self._create_gc_lookup_table()
 
     def _create_gc_lookup_table(self):
-        """Create a lookup tensor that maps each token index to its GC content fraction."""
+        """Build the token-level lookups the GC loss needs (all registered so they follow the model to GPU).
+
+        gc_lookup_tensor:   token index -> GC fraction of the codon
+        gc3_lookup_tensor:  token index -> 1.0 if the third base is G/C
+        mask_lookup_tensor: token index -> amino-acid "unk" token (the fully-masked inference input)
+        synonym_mask:       [amino-acid unk token, codon token] -> True if the codon encodes that amino acid
+        """
         from CodonTransformer.CodonUtils import TOKEN2INDEX
 
-        # Initialize GC lookup tensor for all tokens
         vocab_size = len(TOKEN2INDEX)
         gc_lookup = torch.zeros(vocab_size)
+        gc3_lookup = torch.zeros(vocab_size)
+        mask_lookup = torch.arange(vocab_size)
+        synonym_mask = torch.zeros(vocab_size, vocab_size, dtype=torch.bool)
 
-        # Calculate GC content for each codon token
         for token, idx in TOKEN2INDEX.items():
-            if "_" in token and len(token.split("_")) == 2:
-                # Extract codon sequence (e.g., "k_aaa" -> "aaa")
-                codon = token.split("_")[-1].upper()
-                if len(codon) == 3:  # Valid codon
-                    # Count G and C nucleotides
-                    gc_count = codon.count('G') + codon.count('C')
-                    gc_content = gc_count / 3.0  # Fraction of GC content
-                    gc_lookup[idx] = gc_content
+            if idx >= 26:  # codon tokens only; 0-25 are special and "<aa>_unk" tokens
+                # Last three characters are the codon (e.g. "k_aaa" -> "AAA", "__taa" -> "TAA")
+                codon = token[-3:].upper()
+                gc_lookup[idx] = (codon.count('G') + codon.count('C')) / 3.0
+                gc3_lookup[idx] = float(codon[2] in "GC")
+                mask_lookup[idx] = TOKEN2MASK[idx]
+                synonym_mask[TOKEN2MASK[idx], idx] = True
 
-        # Register as buffer so it moves with the model to GPU
         self.register_buffer("gc_lookup_tensor", gc_lookup)
+        self.register_buffer("gc3_lookup_tensor", gc3_lookup, persistent=False)
+        self.register_buffer("mask_lookup_tensor", mask_lookup, persistent=False)
+        self.register_buffer("synonym_mask", synonym_mask, persistent=False)
+
+    def _inference_condition_gc(self, model_inputs, original_ids):
+        """Per-sequence expected GC and GC3 when every codon is masked to its amino acid.
+
+        Mirrors decoding: only the synonymous codons of each position compete, so the
+        result is what the model would produce for a protein it is asked to optimise.
+        """
+        attention_mask = model_inputs["attention_mask"]
+        valid = (original_ids >= 26) & (attention_mask == 1)  # codon positions only
+        masked_ids = self.mask_lookup_tensor[original_ids]
+        logits = self.model(
+            input_ids=masked_ids,
+            attention_mask=attention_mask,
+            token_type_ids=model_inputs["token_type_ids"],
+        ).logits.float()[valid]
+        synonyms = self.synonym_mask[masked_ids[valid]]
+        probs = torch.softmax(logits.masked_fill(~synonyms, float("-inf")) / self.gc_temperature, dim=-1)
+
+        seq_index = valid.nonzero()[:, 0]
+        counts = valid.sum(dim=1).clamp(min=1)
+        zeros = torch.zeros(valid.shape[0], device=probs.device)
+        seq_gc = zeros.index_add(0, seq_index, probs @ self.gc_lookup_tensor) / counts
+        seq_gc3 = zeros.index_add(0, seq_index, probs @ self.gc3_lookup_tensor) / counts
+        return seq_gc, seq_gc3
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
@@ -210,8 +257,9 @@ class plTrainHarness(pl.LightningModule):
 
         This method implements the core training loop:
         1. Forward pass through the model to get MLM loss
-        2. Calculate expected GC content from predicted codon probabilities
-        3. Apply ALM constraint if enabled (after curriculum warm-up)
+        2. Second forward pass with every codon masked to its amino acid; expected GC/GC3 is taken
+           over the synonymous codons only, per sequence (what decoding will produce)
+        3. Apply the GC penalty (hinge, or ALM if enabled) after the curriculum warm-up
         4. Update Lagrangian multiplier and penalty coefficient adaptively
 
         The ALM loss combines:
@@ -225,99 +273,86 @@ class plTrainHarness(pl.LightningModule):
         Returns:
             Total loss (MLM + GC constraint)
         """
-        # Forward pass
-        outputs = self.model(**batch)
+        # Forward pass (MLM). original_ids is only needed by the GC loss.
+        original_ids = batch["original_ids"]
+        model_inputs = {k: v for k, v in batch.items() if k != "original_ids"}
+        outputs = self.model(**model_inputs)
         mlm_loss = outputs.loss
 
         # Increment step counter
         self.step_counter += 1
 
-        # Enhanced Augmented-Lagrangian GC Control with Self-Tuning
+        # GC control, measured under inference conditions (see _inference_condition_gc)
         gc_loss = 0
         if self.use_lagrangian or self.gc_penalty_weight > 0:
-            logits = outputs.logits
-            probs = torch.softmax(logits, dim=-1)
+            # Enforced only after the curriculum warm-up; the extra forward pass is skipped before that
+            if self.current_epoch >= self.curriculum_epochs:
+                seq_gc, seq_gc3 = self._inference_condition_gc(model_inputs, original_ids)
+                mean_gc = seq_gc.mean()
 
-            # Calculate expected GC content per position using differentiable approach
-            # g_i = Σ_j P_ij · gc(j) where gc(j) is GC content of codon j
-            expected_gc = torch.matmul(probs, self.gc_lookup_tensor)
-
-            # Apply 1D convolution with uniform kernel size 50 for local GC smoothing
-            window_size = 50
-            expected_gc_unsqueezed = expected_gc.unsqueeze(1)  # Add channel dimension
-            conv_weight = torch.ones(1, 1, window_size, device=self.device) / window_size
-            gc_window = F.conv1d(expected_gc_unsqueezed, conv_weight, padding="same").squeeze(1)
-
-            # Mask out padding positions
-            active_positions = batch["labels"] != -100
-            gc_window_active = gc_window[active_positions]
-
-            if gc_window_active.numel() > 0:
-                mean_gc = gc_window_active.mean()
-
-                # Log current GC content
+                # Log the GC that decoding will actually see (name kept for the monitoring callbacks)
                 self.log("mean_gc_window", mean_gc, on_step=True, prog_bar=True)
+                self.log("mean_gc3", seq_gc3.mean().detach(), on_step=True, prog_bar=True)
 
-                # Apply curriculum learning - only enforce GC constraint after warm-up
-                current_epoch = self.current_epoch
-                if current_epoch >= self.curriculum_epochs:
+                if self.use_lagrangian:
+                    # Enhanced Self-Tuning Augmented-Lagrangian approach
+                    gc_deviation = mean_gc - self.gc_target
+                    current_violation = torch.abs(gc_deviation)
 
-                    if self.use_lagrangian:
-                        # Enhanced Self-Tuning Augmented-Lagrangian approach
-                        gc_deviation = mean_gc - self.gc_target
-                        current_violation = torch.abs(gc_deviation)
+                    # Update constraint violation history for adaptive penalty adjustment
+                    new_history = torch.zeros_like(self.constraint_violation_history)
+                    new_history[:-1] = self.constraint_violation_history[1:]
+                    new_history[-1] = current_violation
+                    self.constraint_violation_history = new_history
 
-                        # Update constraint violation history for adaptive penalty adjustment
-                        new_history = torch.zeros_like(self.constraint_violation_history)
-                        new_history[:-1] = self.constraint_violation_history[1:]
-                        new_history[-1] = current_violation
-                        self.constraint_violation_history = new_history
+                    # Self-tuning penalty coefficient (rho) update - inspired by alpaqa
+                    if self.step_counter % 20 == 0 and self.step_counter > 0:
+                        # Check if constraint violation is improving
+                        violation_improvement = self.previous_constraint_violation - current_violation
+                        relative_improvement = violation_improvement / max(self.previous_constraint_violation, 1e-8)
 
-                        # Self-tuning penalty coefficient (rho) update - inspired by alpaqa
-                        if self.step_counter % 20 == 0 and self.step_counter > 0:
-                            # Check if constraint violation is improving
-                            violation_improvement = self.previous_constraint_violation - current_violation
-                            relative_improvement = violation_improvement / max(self.previous_constraint_violation, 1e-8)
+                        # Adaptive rho update based on constraint violation progress
+                        if current_violation > self.alm_dual_tolerance:
+                            # If violation is still too high, check if we're making progress
+                            if relative_improvement < self.alm_rel_penalty_increase_threshold:
+                                # Not improving fast enough, increase penalty
+                                new_rho = self.rho_adaptive * self.alm_penalty_update_factor
+                                self.rho_adaptive = torch.clamp(new_rho, self.alm_min_penalty, self.alm_max_penalty)
 
-                            # Adaptive rho update based on constraint violation progress
-                            if current_violation > self.alm_dual_tolerance:
-                                # If violation is still too high, check if we're making progress
-                                if relative_improvement < self.alm_rel_penalty_increase_threshold:
-                                    # Not improving fast enough, increase penalty
-                                    new_rho = self.rho_adaptive * self.alm_penalty_update_factor
-                                    self.rho_adaptive = torch.clamp(new_rho, self.alm_min_penalty, self.alm_max_penalty)
-
-                                    # Update Lagrangian multiplier
-                                    self.lambda_gc = self.lambda_gc + self.rho_adaptive * gc_deviation.detach()
-                                else:
-                                    # Making good progress, just update multiplier
-                                    self.lambda_gc = self.lambda_gc + self.rho_adaptive * gc_deviation.detach()
-                            else:
-                                # Violation is acceptable, just update multiplier
+                                # Update Lagrangian multiplier
                                 self.lambda_gc = self.lambda_gc + self.rho_adaptive * gc_deviation.detach()
+                            else:
+                                # Making good progress, just update multiplier
+                                self.lambda_gc = self.lambda_gc + self.rho_adaptive * gc_deviation.detach()
+                        else:
+                            # Violation is acceptable, just update multiplier
+                            self.lambda_gc = self.lambda_gc + self.rho_adaptive * gc_deviation.detach()
 
-                            # Update previous violation for next iteration
-                            self.previous_constraint_violation = current_violation
-                            self.alm_iteration_counter += 1
+                        # Update previous violation for next iteration
+                        self.previous_constraint_violation = current_violation
+                        self.alm_iteration_counter += 1
 
-                        # Augmented-Lagrangian loss: λ·(mean_gc - μ) + (ρ/2)(mean_gc - μ)²
-                        lagrangian_term = self.lambda_gc * gc_deviation
-                        penalty_term = (self.rho_adaptive / 2) * (gc_deviation ** 2)
-                        gc_loss = lagrangian_term + penalty_term
+                    # Augmented-Lagrangian loss: λ·(mean_gc - μ) + (ρ/2)(mean_gc - μ)²
+                    lagrangian_term = self.lambda_gc * gc_deviation
+                    penalty_term = (self.rho_adaptive / 2) * (gc_deviation ** 2)
+                    gc_loss = lagrangian_term + penalty_term
 
-                        # Enhanced logging for ALM system monitoring
-                        self.log("lambda_gc", self.lambda_gc, on_step=True, prog_bar=True)
-                        self.log("rho_adaptive", self.rho_adaptive, on_step=True, prog_bar=True)
-                        self.log("gc_deviation", gc_deviation, on_step=True, prog_bar=True)
-                        self.log("constraint_violation", current_violation, on_step=True, prog_bar=False)
-                        self.log("alm_iteration", self.alm_iteration_counter, on_step=True, prog_bar=False)
+                    # Enhanced logging for ALM system monitoring
+                    self.log("lambda_gc", self.lambda_gc, on_step=True, prog_bar=True)
+                    self.log("rho_adaptive", self.rho_adaptive, on_step=True, prog_bar=True)
+                    self.log("gc_deviation", gc_deviation, on_step=True, prog_bar=True)
+                    self.log("constraint_violation", current_violation, on_step=True, prog_bar=False)
+                    self.log("alm_iteration", self.alm_iteration_counter, on_step=True, prog_bar=False)
 
-                    else:
-                        # Penalty approach if not using Lagrangian
-                        gc_dev = F.relu(torch.abs(mean_gc - self.gc_target) - 0.02)  # 2% tolerance
-                        gc_loss = gc_dev
+                else:
+                    # Hinge penalty (no multiplier, so no windup): zero inside the tolerance band,
+                    # linear outside it, applied to each sequence separately
+                    gc_loss = F.relu(torch.abs(seq_gc - self.gc_target) - self.gc_tolerance).mean()
 
-                    self.log("gc_loss", gc_loss, on_step=True, prog_bar=True)
+                if self.gc3_target is not None:
+                    gc_loss = gc_loss + F.relu(torch.abs(seq_gc3 - self.gc3_target) - self.gc_tolerance).mean()
+
+                self.log("gc_loss", gc_loss, on_step=True, prog_bar=True)
 
         # Combine losses
         if self.use_lagrangian:
@@ -525,7 +560,9 @@ def main(args):
         alm_initial_penalty_factor=args.alm_initial_penalty_factor,
         alm_tolerance_update_factor=args.alm_tolerance_update_factor,
         alm_rel_penalty_increase_threshold=args.alm_rel_penalty_increase_threshold,
-        alm_max_penalty=args.alm_max_penalty, alm_min_penalty=args.alm_min_penalty
+        alm_max_penalty=args.alm_max_penalty, alm_min_penalty=args.alm_min_penalty,
+        gc3_target=args.gc3_target, gc_tolerance=args.gc_tolerance,
+        gc_temperature=args.gc_temperature,
     )
 
     # Load the training data
@@ -647,7 +684,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--gc_penalty_weight",
         type=float,
-        default=0.0,
+        default=10,
         help="Weight for the GC content penalty in the loss function",
     )
     parser.add_argument(
@@ -655,6 +692,25 @@ if __name__ == "__main__":
         type=float,
         default=0.4361,
         help="Target GC content as a fraction (default: 0.4361, i.e. 43.61%% for rice)",
+    )
+    parser.add_argument(
+        "--gc3_target",
+        type=float,
+        default=None,
+        help="Optional target for GC at the third codon position, as a fraction (default: not enforced)",
+    )
+    parser.add_argument(
+        "--gc_tolerance",
+        type=float,
+        default=0.5,
+        help="No-penalty band around the GC targets, as a fraction (default: 0.02)",
+    )
+    parser.add_argument(
+        "--gc_temperature",
+        type=float,
+        default=1.0,
+        help="Temperature for measuring GC in the loss. Use <1 (e.g. 0.5) if you decode with argmax, "
+             "so the penalty sees the sharpened distribution argmax picks from (default: 1.0)",
     )
     parser.add_argument(
         "--use_lagrangian",
