@@ -46,6 +46,13 @@ The batch workflow uses [ModelTest/test_data.csv](ModelTest/test_data.csv) as in
 | [finetune.py](finetune.py) | Fine-tuning workflow |
 | [ModelTest/](ModelTest/) | Test data and model predictions |
 | [ModelComparison/](ModelComparison/) | Comparison results |
+| [negative-cis-elements.py](negative-cis-elements.py) | Count potentially problematic cis-elements in a FASTA file |
+
+Set the `fasta_path` variable in `negative-cis-elements.py`, then run:
+
+```powershell
+python negative-cis-elements.py
+```
 
 ## Limitations
 
