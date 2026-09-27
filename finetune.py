@@ -7,6 +7,8 @@ loaded from Hugging Face. See README for usage details.
 """
 
 import argparse
+import gzip
+import math
 import os
 
 import pytorch_lightning as pl
@@ -133,6 +135,8 @@ class plTrainHarness(pl.LightningModule):
         self.warmup_fraction = warmup_fraction
         self.gc_penalty_weight = gc_penalty_weight
         self.tokenizer = tokenizer
+        # Total optimizer steps, set by main(); Lightning cannot estimate it for an IterableDataset
+        self.total_steps = None
 
         # Augmented-Lagrangian GC Control parameters
         self.gc_target = gc_target
@@ -238,11 +242,16 @@ class plTrainHarness(pl.LightningModule):
             lr=self.learning_rate,
         )
 
+        # For an IterableDataset Lightning falls back to max_steps (-1 by default), so prefer our own count
+        total_steps = self.total_steps or self.trainer.estimated_stepping_batches
+        if not (0 < total_steps < float("inf")):
+            raise ValueError(f"Cannot size the LR scheduler: total_steps={total_steps}")
+
         # CosineAnnealingWarmRestarts scheduler
         lr_scheduler = {
             "scheduler": torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
                 optimizer,
-                T_0=int(self.trainer.estimated_stepping_batches // 4),  # First restart after 1/4 of training
+                T_0=max(1, int(total_steps // 4)),  # First restart after 1/4 of training
                 T_mult=2,  # Double the restart period each time
                 eta_min=self.learning_rate * 0.01,  # Minimum learning rate (1% of max)
             ),
@@ -543,6 +552,13 @@ class GCValidationHook(pl.Callback):
 
 
 
+def count_records(path):
+    """Number of non-empty lines in a (possibly gzipped) JSON-lines file."""
+    open_fn = gzip.open if path.endswith(".gz") else open
+    with open_fn(path, "rt", encoding="utf-8") as handle:
+        return sum(1 for line in handle if line.strip())
+
+
 def main(args):
     """Finetune the CodonTransformer model."""
     pl.seed_everything(args.seed)
@@ -574,6 +590,14 @@ def main(args):
         num_workers=0 if args.debug else args.num_workers,
         persistent_workers=False if args.debug else True,
     )
+
+    # Size the LR schedule: the dataset is a stream, so count its records up front
+    num_records = count_records(args.dataset_dir)
+    world_size = max(args.num_gpus, 1)
+    steps_per_epoch = math.ceil(num_records / (args.batch_size * world_size * args.accumulate_grad_batches))
+    harnessed_model.total_steps = max(1, steps_per_epoch * args.max_epochs)
+    print(f"Training records: {num_records} -> ~{steps_per_epoch} optimizer steps/epoch, "
+          f"~{harnessed_model.total_steps} total")
 
     # Setup trainer and callbacks
     save_checkpoint = DumpStateDict(
