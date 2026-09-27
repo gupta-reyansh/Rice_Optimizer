@@ -232,8 +232,10 @@ class plTrainHarness(pl.LightningModule):
         seq_index = valid.nonzero()[:, 0]
         counts = valid.sum(dim=1).clamp(min=1)
         zeros = torch.zeros(valid.shape[0], device=probs.device)
-        seq_gc = zeros.index_add(0, seq_index, probs @ self.gc_lookup_tensor) / counts
-        seq_gc3 = zeros.index_add(0, seq_index, probs @ self.gc3_lookup_tensor) / counts
+        # Autocast (16-mixed) would turn these matmuls into half precision; keep the GC maths in float32
+        with torch.autocast(device_type=probs.device.type, enabled=False):
+            seq_gc = zeros.index_add(0, seq_index, probs @ self.gc_lookup_tensor) / counts
+            seq_gc3 = zeros.index_add(0, seq_index, probs @ self.gc3_lookup_tensor) / counts
         return seq_gc, seq_gc3
 
     def configure_optimizers(self):
