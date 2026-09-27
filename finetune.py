@@ -621,7 +621,8 @@ def main(args):
     trainer.fit(harnessed_model, data_loader)
 
 
-if __name__ == "__main__":
+def build_parser():
+    """Argument parser for finetune.py (also used by finetune_species_model.py)."""
     parser = argparse.ArgumentParser(description="Fine-tune CodonTransformer for rice codon optimization.")
     parser.add_argument(
         "--dataset_dir",
@@ -702,8 +703,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--gc_tolerance",
         type=float,
-        default=0.5,
-        help="No-penalty band around the GC targets, as a fraction (default: 0.02)",
+        default=0.005,
+        help="No-penalty band around the GC targets, as a fraction (default: 0.005, i.e. 0.5%% GC)",
     )
     parser.add_argument(
         "--gc_temperature",
@@ -785,6 +786,9 @@ if __name__ == "__main__":
         default=1e-6,
         help="Minimum ALM penalty value",
     )
+    return parser
 
-    args = parser.parse_args()
+
+if __name__ == "__main__":
+    args = build_parser().parse_args()
     main(args)
