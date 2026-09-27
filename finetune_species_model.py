@@ -194,7 +194,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gc_penalty_weight", type=float, default=0.0)
     parser.add_argument("--gc_target", type=float, default=0.4361)
     parser.add_argument("--gc3_target", type=float, default=None)
-    parser.add_argument("--gc_tolerance", type=float, default=0.02)
+    parser.add_argument("--gc_tolerance", type=float, default=0.005)
     parser.add_argument("--gc_temperature", type=float, default=1.0)
     parser.add_argument("--curriculum_epochs", type=int, default=3)
     parser.add_argument("--use_lagrangian", action="store_true")
