@@ -392,8 +392,13 @@ class DumpStateDict(pl.Callback):
 
     def on_save_checkpoint(self, trainer, pl_module, checkpoint):
         model = pl_module.model
+        # Wrap as {"state_dict": {"model.<key>": tensor}} to match the format
+        # CodonPrediction.load_model() and constrained_decode.py expect from a
+        # ".ckpt" file, while skipping optimizer state to keep the file small.
+        state_dict = {f"model.{k}": v for k, v in model.state_dict().items()}
         torch.save(
-            model.state_dict(), os.path.join(self.dirpath, self.checkpoint_filename)
+            {"state_dict": state_dict},
+            os.path.join(self.dirpath, self.checkpoint_filename),
         )
 
 
