@@ -35,6 +35,7 @@ FINETUNE_PASSTHROUGH = (
     "gc_temperature",
     "curriculum_epochs",
     "use_lagrangian",
+    "motif_penalty_weight",
 )
 
 
@@ -198,6 +199,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gc_temperature", type=float, default=1.0)
     parser.add_argument("--curriculum_epochs", type=int, default=3)
     parser.add_argument("--use_lagrangian", action="store_true")
+
+    # Negative-cis-motif control (see finetune.py). A weight of 0 (default) leaves it off.
+    parser.add_argument("--motif_penalty_weight", type=float, default=0.0)
     return parser.parse_args()
 
 
