@@ -28,6 +28,11 @@ from CodonTransformer.CodonUtils import (
 # Reduce excessive INFO logs from transformers
 hf_logging.set_verbosity_warning()
 
+# Kept in sync with compare_datasets.py's NEGATIVE_CIS_MOTIFS; duplicated (rather than
+# imported) so finetune.py has no dependency on pandas/Bio in training environments.
+NEGATIVE_CIS_MOTIFS = ["AATAAA", "TATAAT", "TTGACA"]
+BASE2IDX = {"A": 0, "T": 1, "C": 2, "G": 3}
+
 class MaskedTokenizerCollator:
     def __init__(self, tokenizer):
         self.tokenizer = tokenizer
@@ -122,18 +127,23 @@ class plTrainHarness(pl.LightningModule):
         gc_tolerance: Half-width of the no-penalty band around the GC targets (default: 0.02)
         gc_temperature: Softmax temperature used only when measuring GC. Below 1 sharpens the
             distribution toward its mode, approximating argmax decoding (default: 1.0)
+        motif_penalty_weight: Weight for the negative-cis-motif penalty, added to the loss as
+            motif_penalty_weight * expected_motif_count_per_sequence (default: 0.0 = disabled).
+            Measured on the same inference-conditioned forward pass as the GC loss, so it shares
+            the curriculum warm-up (curriculum_epochs) and is skipped entirely when 0.
     """
     def __init__(self, model, learning_rate, warmup_fraction, gc_penalty_weight, tokenizer,
                  gc_target=0.4361, use_lagrangian=False, lagrangian_rho=10.0, curriculum_epochs=3,
                  alm_tolerance=1e-5, alm_dual_tolerance=1e-5, alm_penalty_update_factor=10.0,
                  alm_initial_penalty_factor=20.0, alm_tolerance_update_factor=0.1,
                  alm_rel_penalty_increase_threshold=0.1, alm_max_penalty=1e6, alm_min_penalty=1e-6,
-                 gc3_target=None, gc_tolerance=0.02, gc_temperature=1.0):
+                 gc3_target=None, gc_tolerance=0.02, gc_temperature=1.0, motif_penalty_weight=0.0):
         super().__init__()
         self.model = model
         self.learning_rate = learning_rate
         self.warmup_fraction = warmup_fraction
         self.gc_penalty_weight = gc_penalty_weight
+        self.motif_penalty_weight = motif_penalty_weight
         self.tokenizer = tokenizer
         # Total optimizer steps, set by main(); Lightning cannot estimate it for an IterableDataset
         self.total_steps = None
@@ -181,6 +191,7 @@ class plTrainHarness(pl.LightningModule):
 
         # Create GC lookup table for codons
         self._create_gc_lookup_table()
+        self._create_motif_lookup_table()
 
     def _create_gc_lookup_table(self):
         """Build the token-level lookups the GC loss needs (all registered so they follow the model to GPU).
@@ -212,11 +223,41 @@ class plTrainHarness(pl.LightningModule):
         self.register_buffer("mask_lookup_tensor", mask_lookup, persistent=False)
         self.register_buffer("synonym_mask", synonym_mask, persistent=False)
 
-    def _inference_condition_gc(self, model_inputs, original_ids):
-        """Per-sequence expected GC and GC3 when every codon is masked to its amino acid.
+    def _create_motif_lookup_table(self):
+        """token index -> one-hot [3, 4] of (nucleotide sub-position, base) for that codon.
+
+        Non-codon tokens stay all-zero, so they never contribute once multiplied with `probs`
+        (which is itself already ~0 there from the GC lookup's softmax masking).
+        """
+        from CodonTransformer.CodonUtils import TOKEN2INDEX
+
+        vocab_size = len(TOKEN2INDEX)
+        base_onehot = torch.zeros(vocab_size, 3, 4)
+        for token, idx in TOKEN2INDEX.items():
+            if idx >= 26:
+                codon = token[-3:].upper()
+                for pos in range(3):
+                    base = codon[pos]
+                    if base in BASE2IDX:
+                        base_onehot[idx, pos, BASE2IDX[base]] = 1.0
+
+        self.register_buffer("base_onehot_flat", base_onehot.reshape(vocab_size, 12), persistent=False)
+        # Per motif, the base index (0..3) required at each of its positions.
+        self.motif_base_indices = [
+            [BASE2IDX[base] for base in motif] for motif in NEGATIVE_CIS_MOTIFS
+        ]
+
+    def _inference_forward(self, model_inputs, original_ids):
+        """Masked-to-amino-acid forward pass shared by the GC and motif losses.
 
         Mirrors decoding: only the synonymous codons of each position compete, so the
         result is what the model would produce for a protein it is asked to optimise.
+
+        Returns:
+            probs: [num_valid_positions, vocab_size] softmax over synonymous codons.
+            seq_index: [num_valid_positions] which batch row each position belongs to,
+                in left-to-right order within a row (needed by the motif loss).
+            counts: [batch_size] number of valid codon positions per row.
         """
         attention_mask = model_inputs["attention_mask"]
         valid = (original_ids >= 26) & (attention_mask == 1)  # codon positions only
@@ -231,12 +272,56 @@ class plTrainHarness(pl.LightningModule):
 
         seq_index = valid.nonzero()[:, 0]
         counts = valid.sum(dim=1).clamp(min=1)
-        zeros = torch.zeros(valid.shape[0], device=probs.device)
+        return probs, seq_index, counts
+
+    def _inference_condition_gc(self, probs, seq_index, counts):
+        """Per-sequence expected GC and GC3 from the shared inference-conditioned probs."""
+        zeros = torch.zeros(counts.shape[0], device=probs.device)
         # Autocast (16-mixed) would turn these matmuls into half precision; keep the GC maths in float32
         with torch.autocast(device_type=probs.device.type, enabled=False):
             seq_gc = zeros.index_add(0, seq_index, probs @ self.gc_lookup_tensor) / counts
             seq_gc3 = zeros.index_add(0, seq_index, probs @ self.gc3_lookup_tensor) / counts
         return seq_gc, seq_gc3
+
+    def _inference_condition_motifs(self, probs, seq_index, batch_size):
+        """Expected number of negative-cis-motif occurrences per sequence (mean over the batch).
+
+        Each codon position's synonymous-codon distribution is marginalised down to a
+        per-nucleotide base distribution, then flattened to one base-probability sequence
+        per batch row (in original left-to-right order). For a motif of length L, the
+        probability of it starting at nucleotide offset s is approximated as the product
+        of the L per-position base probabilities (treating adjacent positions as
+        independent, consistent with the model's per-position masked prediction); summing
+        over all valid offsets gives the expected occurrence count for that sequence.
+        """
+        device, dtype = probs.device, probs.dtype
+        if probs.numel() == 0:
+            return torch.zeros((), device=device, dtype=dtype)
+
+        with torch.autocast(device_type=device.type, enabled=False):
+            # [num_valid_positions, 3, 4] -> probability of each base at each codon sub-position
+            base_probs = (probs @ self.base_onehot_flat).reshape(-1, 3, 4)
+
+            total = torch.zeros((), device=device, dtype=dtype)
+            for b in range(batch_size):
+                rows = (seq_index == b).nonzero(as_tuple=True)[0]
+                if rows.numel() == 0:
+                    continue
+                # Flatten this sequence's codons into one base-probability-per-nucleotide tensor.
+                flat = base_probs[rows].reshape(-1, 4)  # [num_codons * 3, 4]
+                n_nt = flat.shape[0]
+
+                for motif_bases in self.motif_base_indices:
+                    motif_len = len(motif_bases)
+                    n_windows = n_nt - motif_len + 1
+                    if n_windows <= 0:
+                        continue
+                    window_probs = torch.ones(n_windows, device=device, dtype=dtype)
+                    for k, base_idx in enumerate(motif_bases):
+                        window_probs = window_probs * flat[k : k + n_windows, base_idx]
+                    total = total + window_probs.sum()
+
+        return total / max(batch_size, 1)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
@@ -293,13 +378,20 @@ class plTrainHarness(pl.LightningModule):
         # Increment step counter
         self.step_counter += 1
 
-        # GC control, measured under inference conditions (see _inference_condition_gc)
+        # GC and negative-cis-motif control, measured under inference conditions
+        # (see _inference_forward); both share the one extra forward pass below.
         gc_loss = 0
-        if self.use_lagrangian or self.gc_penalty_weight > 0:
+        motif_loss = 0
+        if self.use_lagrangian or self.gc_penalty_weight > 0 or self.motif_penalty_weight > 0:
             # Enforced only after the curriculum warm-up; the extra forward pass is skipped before that
             if self.current_epoch >= self.curriculum_epochs:
-                seq_gc, seq_gc3 = self._inference_condition_gc(model_inputs, original_ids)
+                probs, seq_index, counts = self._inference_forward(model_inputs, original_ids)
+                seq_gc, seq_gc3 = self._inference_condition_gc(probs, seq_index, counts)
                 mean_gc = seq_gc.mean()
+
+                if self.motif_penalty_weight > 0:
+                    motif_loss = self._inference_condition_motifs(probs, seq_index, counts.shape[0])
+                    self.log("motif_loss", motif_loss, on_step=True, prog_bar=True)
 
                 # Log the GC that decoding will actually see (name kept for the monitoring callbacks)
                 self.log("mean_gc_window", mean_gc, on_step=True, prog_bar=True)
@@ -365,11 +457,12 @@ class plTrainHarness(pl.LightningModule):
 
                 self.log("gc_loss", gc_loss, on_step=True, prog_bar=True)
 
-        # Combine losses
+        # Combine losses. The motif penalty is a plain weighted term (not part of the GC
+        # Lagrangian/hinge machinery) since there is no target band to hit, just "lower is better".
         if self.use_lagrangian:
-            total_loss = mlm_loss + gc_loss
+            total_loss = mlm_loss + gc_loss + self.motif_penalty_weight * motif_loss
         else:
-            total_loss = mlm_loss + self.gc_penalty_weight * gc_loss
+            total_loss = mlm_loss + self.gc_penalty_weight * gc_loss + self.motif_penalty_weight * motif_loss
 
         self.log_dict(
             dictionary={
@@ -585,7 +678,7 @@ def main(args):
         alm_rel_penalty_increase_threshold=args.alm_rel_penalty_increase_threshold,
         alm_max_penalty=args.alm_max_penalty, alm_min_penalty=args.alm_min_penalty,
         gc3_target=args.gc3_target, gc_tolerance=args.gc_tolerance,
-        gc_temperature=args.gc_temperature,
+        gc_temperature=args.gc_temperature, motif_penalty_weight=args.motif_penalty_weight,
     )
 
     # Load the training data
@@ -743,6 +836,14 @@ def build_parser():
         default=1.0,
         help="Temperature for measuring GC in the loss. Use <1 (e.g. 0.5) if you decode with argmax, "
              "so the penalty sees the sharpened distribution argmax picks from (default: 1.0)",
+    )
+    parser.add_argument(
+        "--motif_penalty_weight",
+        type=float,
+        default=0.0,
+        help="Weight for the negative-cis-motif penalty in the loss function (0 = disabled). "
+             "Shares the GC loss's curriculum warm-up (--curriculum_epochs) and inference-"
+             "conditioned forward pass.",
     )
     parser.add_argument(
         "--use_lagrangian",
