@@ -28,8 +28,7 @@ from CodonTransformer.CodonUtils import (
 # Reduce excessive INFO logs from transformers
 hf_logging.set_verbosity_warning()
 
-# Kept in sync with compare_datasets.py's NEGATIVE_CIS_MOTIFS; duplicated (rather than
-# imported) so finetune.py has no dependency on pandas/Bio in training environments.
+# List of negative motifs in rice mitochondria that the model tries to avoid
 NEGATIVE_CIS_MOTIFS = ["AATAAA", "TATAAT", "TTGACA"]
 BASE2IDX = {"A": 0, "T": 1, "C": 2, "G": 3}
 
@@ -486,8 +485,8 @@ class DumpStateDict(pl.Callback):
     def on_save_checkpoint(self, trainer, pl_module, checkpoint):
         model = pl_module.model
         # Wrap as {"state_dict": {"model.<key>": tensor}} to match the format
-        # CodonPrediction.load_model() and constrained_decode.py expect from a
-        # ".ckpt" file, while skipping optimizer state to keep the file small.
+        # CodonPrediction.load_model() expects from a ".ckpt" file, while
+        # skipping optimizer state to keep the file small.
         state_dict = {f"model.{k}": v for k, v in model.state_dict().items()}
         torch.save(
             {"state_dict": state_dict},
@@ -497,6 +496,11 @@ class DumpStateDict(pl.Callback):
 
 class ALMMonitoringCallback(pl.Callback):
     """Monitor ALM behavior and log convergence metrics."""
+    """Augmented Lagrangian Method for monitoring GC content during training.
+    
+        ALM monitoring design adapted from ColiFormer (Baddam et al., 2026),
+        https://doi.org/10.3390/bioengineering13010114.
+        """
 
     def __init__(self, log_every_n_steps=20, convergence_window=50):
         super().__init__()
@@ -607,7 +611,11 @@ class ALMMonitoringCallback(pl.Callback):
 
 
 class GCValidationHook(pl.Callback):
-    """Validation hook to monitor GC content during training."""
+    """Validation hook to monitor GC content during training.
+
+    GC monitoring/feedback design adapted from ColiFormer (Baddam et al., 2026),
+    https://doi.org/10.3390/bioengineering13010114.
+    """
 
     def __init__(self, gc_target=0.4361, tolerance=0.02):
         super().__init__()

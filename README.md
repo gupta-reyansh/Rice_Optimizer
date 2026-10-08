@@ -27,7 +27,7 @@ The sequences were prepared by:
 
 Use [CodonTransformerDemo.ipynb](CodonTransformerDemo.ipynb) to make predictions. The notebook includes single-sequence and batch prediction workflows.
 
-The batch workflow uses [ModelTest/test_data.csv](ModelTest/test_data.csv) as input and writes predictions to [ModelTest/model_predictions.csv](ModelTest/model_predictions.csv). The prediction output includes a `predicted_dna` column.
+The batch workflow uses [ModelTest/nifH_data.csv](ModelTest/nifH_data.csv) as input and writes predictions to [ModelTest/model_predictions.csv](ModelTest/model_predictions.csv). The prediction output includes a `predicted_dna` column.
 
 ## Evaluation
 
