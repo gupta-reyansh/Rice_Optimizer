@@ -166,14 +166,26 @@ def load_pairs_from_model_csv(path: Path) -> List[Tuple[str, str]]:
     return pairs
 
 
+def translate(dna: str) -> str:
+    return "".join(GENETIC_CODE[dna[i:i + 3]] for i in range(0, len(dna), 3))
+
+
 def load_pairs_idt(path: Path, test_df: pd.DataFrame) -> List[Tuple[str, str]]:
-    """idt_processed.csv has no id column; row order matches nifH_data.csv."""
+    """idt_processed.csv has no id column, so match each optimized sequence to the
+    original that encodes the same protein (row order only breaks ties between
+    originals that share a protein)."""
     df = pd.read_csv(path)
+    originals_by_protein: Dict[str, List[str]] = {}
+    for orig in test_df["sequence"]:
+        o = clean_coding_sequence(orig)
+        if o:
+            originals_by_protein.setdefault(translate(o), []).append(o)
+
     pairs = []
-    for orig, pred in zip(test_df["sequence"], df["Optimized Sequence"]):
-        o, p = clean_coding_sequence(orig), clean_coding_sequence(pred)
-        if o and p:
-            pairs.append((o, p))
+    for pred in df["Optimized Sequence"]:
+        p = clean_coding_sequence(pred)
+        if p and originals_by_protein.get(translate(p)):
+            pairs.append((originals_by_protein[translate(p)].pop(0), p))
     return pairs
 
 
