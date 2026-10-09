@@ -1,3 +1,7 @@
+> **Source note:** This guide comes from [missall999/CodonTransformer](https://github.com/missall999/CodonTransformer) (`NEW_SPECIES_MODEL_GUIDE.md`), a fork of [Adibvafa/CodonTransformer](https://github.com/Adibvafa/CodonTransformer). The fork is licensed under the [Apache License 2.0](https://github.com/missall999/CodonTransformer/blob/main/LICENSE) (Copyright 2024 Adibvafa Fallahpour). The upstream guide is written in Chinese; this is an English version, renamed for the Rice Optimizer repository. The scripts it describes (`train_species_model.py`, `pretrain.py`) belong to the same fork.
+
+---
+
 # Technical Guide to Retraining Model for a Single Species
 
 ---

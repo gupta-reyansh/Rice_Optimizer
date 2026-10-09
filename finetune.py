@@ -349,21 +349,16 @@ class plTrainHarness(pl.LightningModule):
         Returns:
             Total loss (MLM + GC constraint)
         """
-        # Forward pass (MLM). original_ids is only needed by the GC loss.
         original_ids = batch["original_ids"]
         model_inputs = {k: v for k, v in batch.items() if k != "original_ids"}
         outputs = self.model(**model_inputs)
         mlm_loss = outputs.loss
-
-        # Increment step counter
         self.step_counter += 1
 
         # GC and negative-cis-motif control, measured under inference conditions
-        # (see _inference_forward); both share the one extra forward pass below.
         gc_loss = 0
         motif_loss = 0
         if self.use_lagrangian or self.gc_penalty_weight > 0 or self.motif_penalty_weight > 0:
-            # Enforced only after the curriculum warm-up; the extra forward pass is skipped before that
             if self.current_epoch >= self.curriculum_epochs:
                 probs, seq_index, counts = self._inference_forward(model_inputs, original_ids)
                 seq_gc, seq_gc3 = self._inference_condition_gc(probs, seq_index, counts)
@@ -373,16 +368,12 @@ class plTrainHarness(pl.LightningModule):
                     motif_loss = self._inference_condition_motifs(probs, seq_index, counts.shape[0])
                     self.log("motif_loss", motif_loss, on_step=True, prog_bar=True)
 
-                # Log the GC that decoding will actually see (name kept for the monitoring callbacks)
                 self.log("mean_gc_window", mean_gc, on_step=True, prog_bar=True)
                 self.log("mean_gc3", seq_gc3.mean().detach(), on_step=True, prog_bar=True)
 
                 if self.use_lagrangian:
-                    # Enhanced Self-Tuning Augmented-Lagrangian approach
                     gc_deviation = mean_gc - self.gc_target
                     current_violation = torch.abs(gc_deviation)
-
-                    # Update constraint violation history for adaptive penalty adjustment
                     new_history = torch.zeros_like(self.constraint_violation_history)
                     new_history[:-1] = self.constraint_violation_history[1:]
                     new_history[-1] = current_violation
@@ -390,28 +381,18 @@ class plTrainHarness(pl.LightningModule):
 
                     # Self-tuning penalty coefficient (rho) update - inspired by alpaqa
                     if self.step_counter % 20 == 0 and self.step_counter > 0:
-                        # Check if constraint violation is improving
                         violation_improvement = self.previous_constraint_violation - current_violation
                         relative_improvement = violation_improvement / max(self.previous_constraint_violation, 1e-8)
-
-                        # Adaptive rho update based on constraint violation progress
                         if current_violation > self.alm_dual_tolerance:
-                            # If violation is still too high, check if we're making progress
                             if relative_improvement < self.alm_rel_penalty_increase_threshold:
-                                # Not improving fast enough, increase penalty
                                 new_rho = self.rho_adaptive * self.alm_penalty_update_factor
                                 self.rho_adaptive = torch.clamp(new_rho, self.alm_min_penalty, self.alm_max_penalty)
-
-                                # Update Lagrangian multiplier
                                 self.lambda_gc = self.lambda_gc + self.rho_adaptive * gc_deviation.detach()
                             else:
-                                # Making good progress, just update multiplier
                                 self.lambda_gc = self.lambda_gc + self.rho_adaptive * gc_deviation.detach()
                         else:
-                            # Violation is acceptable, just update multiplier
                             self.lambda_gc = self.lambda_gc + self.rho_adaptive * gc_deviation.detach()
 
-                        # Update previous violation for next iteration
                         self.previous_constraint_violation = current_violation
                         self.alm_iteration_counter += 1
 
@@ -420,7 +401,6 @@ class plTrainHarness(pl.LightningModule):
                     penalty_term = (self.rho_adaptive / 2) * (gc_deviation ** 2)
                     gc_loss = lagrangian_term + penalty_term
 
-                    # Enhanced logging for ALM system monitoring
                     self.log("lambda_gc", self.lambda_gc, on_step=True, prog_bar=True)
                     self.log("rho_adaptive", self.rho_adaptive, on_step=True, prog_bar=True)
                     self.log("gc_deviation", gc_deviation, on_step=True, prog_bar=True)
@@ -428,8 +408,6 @@ class plTrainHarness(pl.LightningModule):
                     self.log("alm_iteration", self.alm_iteration_counter, on_step=True, prog_bar=False)
 
                 else:
-                    # Hinge penalty (no multiplier, so no windup): zero inside the tolerance band,
-                    # linear outside it, applied to each sequence separately
                     gc_loss = F.relu(torch.abs(seq_gc - self.gc_target) - self.gc_tolerance).mean()
 
                 if self.gc3_target is not None:
@@ -437,8 +415,6 @@ class plTrainHarness(pl.LightningModule):
 
                 self.log("gc_loss", gc_loss, on_step=True, prog_bar=True)
 
-        # Combine losses. The motif penalty is a plain weighted term (not part of the GC
-        # Lagrangian/hinge machinery) since there is no target band to hit, just "lower is better".
         if self.use_lagrangian:
             total_loss = mlm_loss + gc_loss + self.motif_penalty_weight * motif_loss
         else:
@@ -465,9 +441,6 @@ class DumpStateDict(pl.Callback):
 
     def on_save_checkpoint(self, trainer, pl_module, checkpoint):
         model = pl_module.model
-        # Wrap as {"state_dict": {"model.<key>": tensor}} to match the format
-        # CodonPrediction.load_model() expects from a ".ckpt" file, while
-        # skipping optimizer state to keep the file small.
         state_dict = {f"model.{k}": v for k, v in model.state_dict().items()}
         torch.save(
             {"state_dict": state_dict},
@@ -487,8 +460,6 @@ class ALMMonitoringCallback(pl.Callback):
         super().__init__()
         self.log_every_n_steps = log_every_n_steps
         self.convergence_window = convergence_window
-
-        # Track ALM convergence metrics
         self.lambda_history = []
         self.rho_history = []
         self.violation_history = []
@@ -498,39 +469,28 @@ class ALMMonitoringCallback(pl.Callback):
         """Monitor ALM system on each training step."""
         if hasattr(pl_module, 'use_lagrangian') and pl_module.use_lagrangian:
             current_step = trainer.global_step
-
-            # Log ALM metrics every N steps
             if current_step % self.log_every_n_steps == 0:
-                # Extract ALM state from logged metrics
                 lambda_gc = trainer.logged_metrics.get('lambda_gc', 0)
                 rho_adaptive = trainer.logged_metrics.get('rho_adaptive', 0)
                 constraint_violation = trainer.logged_metrics.get('constraint_violation', 0)
                 gc_deviation = trainer.logged_metrics.get('gc_deviation', 0)
-
-                # Store history for convergence analysis
                 self.lambda_history.append(float(lambda_gc))
                 self.rho_history.append(float(rho_adaptive))
                 self.violation_history.append(float(constraint_violation))
                 self.step_history.append(current_step)
-
-                # Keep only recent history for efficiency
+                
                 if len(self.lambda_history) > self.convergence_window:
                     self.lambda_history = self.lambda_history[-self.convergence_window:]
                     self.rho_history = self.rho_history[-self.convergence_window:]
                     self.violation_history = self.violation_history[-self.convergence_window:]
                     self.step_history = self.step_history[-self.convergence_window:]
-
-                # Log ALM metrics to TensorBoard
                 if trainer.logger is not None:
-                    # Primary ALM metrics
                     trainer.logger.log_metrics({
                         'alm/lambda_gc': float(lambda_gc),
                         'alm/rho_adaptive': float(rho_adaptive),
                         'alm/constraint_violation': float(constraint_violation),
                         'alm/gc_deviation': float(gc_deviation),
                     }, step=current_step)
-
-                    # Convergence analysis (if we have sufficient history)
                     if len(self.violation_history) >= 10:
                         recent_violations = self.violation_history[-10:]
                         violation_trend = recent_violations[-1] - recent_violations[0]
@@ -546,19 +506,12 @@ class ALMMonitoringCallback(pl.Callback):
         """Comprehensive ALM system analysis at epoch end."""
         if hasattr(pl_module, 'use_lagrangian') and pl_module.use_lagrangian:
             current_epoch = trainer.current_epoch
-
-            # Only analyze after curriculum warm-up period
             if current_epoch >= pl_module.curriculum_epochs:
-                # Get current ALM state
                 lambda_gc = trainer.logged_metrics.get('lambda_gc', 0)
                 rho_adaptive = trainer.logged_metrics.get('rho_adaptive', 0)
                 constraint_violation = trainer.logged_metrics.get('constraint_violation', 0)
                 mean_gc = trainer.logged_metrics.get('mean_gc_window', 0)
-
-                # ALM convergence assessment
                 converged = float(constraint_violation) <= pl_module.alm_dual_tolerance
-
-                # Detailed epoch summary
                 print(f"\n{'='*60}")
                 print(f"ALM System Analysis - Epoch {current_epoch}")
                 print(f"{'='*60}")
@@ -569,7 +522,6 @@ class ALMMonitoringCallback(pl.Callback):
                 print(f"   • Rho (Penalty): {float(rho_adaptive):.2e}")
                 print(f"   • Converged: {'Yes' if converged else 'No'}")
 
-                # Convergence diagnostics
                 if len(self.violation_history) >= 5:
                     recent_violations = self.violation_history[-5:]
                     improvement_rate = (recent_violations[0] - recent_violations[-1]) / max(recent_violations[0], 1e-8)
@@ -580,8 +532,6 @@ class ALMMonitoringCallback(pl.Callback):
                     print(f"   • Stability: {'Good' if max(recent_violations) - min(recent_violations) < 1e-3 else 'Improving'}")
 
                 print(f"{'='*60}\n")
-
-                # TensorBoard epoch summary
                 if trainer.logger is not None:
                     trainer.logger.log_metrics({
                         'alm_epoch/converged': 1.0 if converged else 0.0,
@@ -609,19 +559,12 @@ class GCValidationHook(pl.Callback):
         """Check GC content at the end of each epoch."""
         if hasattr(pl_module, 'use_lagrangian') and pl_module.use_lagrangian:
             current_epoch = trainer.current_epoch
-
-            # Only validate after curriculum warm-up period
             if current_epoch >= pl_module.curriculum_epochs:
-                # Get the logged mean GC content from the last step
                 if 'mean_gc_window' in trainer.logged_metrics:
                     current_gc = trainer.logged_metrics.get('mean_gc_window', None)
-
                     if current_gc is not None:
                         current_gc_val = float(current_gc)
-
-                        # Log validation status
                         within_target = self.gc_target_min <= current_gc_val <= self.gc_target_max
-
                         if within_target:
                             print(
                                 f"Epoch {current_epoch}: GC content {current_gc_val:.3f} is within target range "
@@ -632,8 +575,6 @@ class GCValidationHook(pl.Callback):
                                 f"Epoch {current_epoch}: GC content {current_gc_val:.3f} is outside target range "
                                 f"[{self.gc_target_min:.3f}, {self.gc_target_max:.3f}]"
                             )
-
-                        # Log lambda value if available
                         if 'lambda_gc' in trainer.logged_metrics:
                             lambda_val = float(trainer.logged_metrics.get('lambda_gc', 0))
                             print(f"   Lambda: {lambda_val:.4f}")
@@ -680,7 +621,6 @@ def main(args):
         persistent_workers=False if args.debug else True,
     )
 
-    # Size the LR schedule: the dataset is a stream, so count its records up front
     num_records = count_records(args.dataset_dir)
     world_size = max(args.num_gpus, 1)
     steps_per_epoch = math.ceil(num_records / (args.batch_size * world_size * args.accumulate_grad_batches))
@@ -688,7 +628,6 @@ def main(args):
     print(f"Training records: {num_records} -> ~{steps_per_epoch} optimizer steps/epoch, "
           f"~{harnessed_model.total_steps} total")
 
-    # Setup trainer and callbacks
     save_checkpoint = DumpStateDict(
         checkpoint_dir=args.checkpoint_dir,
         checkpoint_filename=args.checkpoint_filename,
@@ -699,22 +638,18 @@ def main(args):
         tolerance=0.02  # 2% tolerance around target
     )
 
-    # Enhanced ALM monitoring callback for comprehensive system analysis
     alm_monitor = ALMMonitoringCallback(
         log_every_n_steps=args.log_every_n_steps,
-        convergence_window=50  # Track last 50 steps for convergence analysis
+        convergence_window=50 
     )
 
     callbacks = [save_checkpoint, gc_validation, alm_monitor]
-
-    # Determine accelerator and device configuration dynamically
     if args.num_gpus > 0:
         accelerator = "gpu"
         devices = args.num_gpus
     else:
-        # Fallback to CPU training when --num_gpus 0
         accelerator = "cpu"
-        devices = 1  # Lightning expects at least one device
+        devices = 1  
 
     trainer = pl.Trainer(
         default_root_dir=args.checkpoint_dir,
@@ -858,7 +793,7 @@ def build_parser():
         help="How often to log metrics (in training steps)",
     )
 
-    # Enhanced ALM parameters for self-tuning GC constraint system
+    #ALM parameters for self-tuning GC constraint system
     parser.add_argument(
         "--alm_tolerance",
         type=float,

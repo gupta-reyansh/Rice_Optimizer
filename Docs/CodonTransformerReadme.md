@@ -1,3 +1,7 @@
+> **Source note:** This file is the README of [Adibvafa/CodonTransformer](https://github.com/Adibvafa/CodonTransformer) by Adibvafa Fallahpour et al., licensed under the [Apache License 2.0](https://github.com/Adibvafa/CodonTransformer/blob/main/LICENSE) (Copyright 2024 Adibvafa Fallahpour). It was copied into the Rice Optimizer repository for reference and renamed from `README.md` to `CodonTransformerReadme.md`; its content is otherwise the upstream text. See the [paper](https://doi.org/10.1038/s41467-025-58588-7) to cite the original work.
+
+---
+
 <p align="center">
   <img src="https://github.com/Adibvafa/CodonTransformer/raw/main/src/banner_final.png" alt="CodonTransformer Logo" width="100%" height="100%" style="vertical-align: middle;"/>
 </p>
