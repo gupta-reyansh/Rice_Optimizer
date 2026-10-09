@@ -41,7 +41,6 @@ The batch workflow uses [ModelTest/nifH_data.csv](ModelTest/nifH_data.csv) as in
 | [CodonTransformer/](CodonTransformer/) | Model data, prediction, evaluation, and utility modules |
 | [CodonTransformerDemo.ipynb](CodonTransformerDemo.ipynb) | Main prediction notebook |
 | [train_species_model.py](train_species_model.py) | Species-model training workflow |
-| [fasta_to_training_csv.py](fasta_to_training_csv.py) | FASTA-to-training-data preparation script |
 | [pretrain.py](pretrain.py) | Pretraining workflow |
 | [finetune.py](finetune.py) | Fine-tuning workflow |
 | [ModelTest/](ModelTest/) | Test data and model predictions |

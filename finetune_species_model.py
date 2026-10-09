@@ -14,8 +14,6 @@ from CodonTransformer.CodonData import prepare_training_data, read_fasta_file
 
 
 REPO_ROOT = Path(__file__).resolve().parent
-
-# Options this wrapper forwards unchanged to finetune.main.
 FINETUNE_PASSTHROUGH = (
     "checkpoint_filename",
     "batch_size",
@@ -114,9 +112,6 @@ def run_finetune(
     from finetune import build_parser, main as finetune_main
 
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-
-    # Start from finetune.py's own defaults (ALM settings, log interval, ...), then override
-    # with everything this wrapper exposes, so the two scripts cannot drift apart.
     finetune_args = build_parser().parse_args(
         ["--dataset_dir", str(training_json_path), "--checkpoint_dir", str(checkpoint_dir)]
     )
@@ -191,7 +186,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--debug", action="store_true")
 
-    # GC control (see finetune.py). Defaults match finetune.py; a weight of 0 leaves it off.
+    # GC control. Defaults match finetune.py; a weight of 0 leaves it off.
     parser.add_argument("--gc_penalty_weight", type=float, default=0.0)
     parser.add_argument("--gc_target", type=float, default=0.4361)
     parser.add_argument("--gc3_target", type=float, default=None)
@@ -200,7 +195,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--curriculum_epochs", type=int, default=3)
     parser.add_argument("--use_lagrangian", action="store_true")
 
-    # Negative-cis-motif control (see finetune.py). A weight of 0 (default) leaves it off.
+    # Negative-cis-motif control. A weight of 0 (default) leaves it off.
     parser.add_argument("--motif_penalty_weight", type=float, default=0.0)
     return parser.parse_args()
 

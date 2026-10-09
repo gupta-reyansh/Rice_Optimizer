@@ -24,8 +24,6 @@ from CodonTransformer.CodonUtils import (
     TOKEN2MASK,
     IterableJSONData,
 )
-
-# Reduce excessive INFO logs from transformers
 hf_logging.set_verbosity_warning()
 
 # List of negative motifs in rice mitochondria that the model tries to avoid
@@ -75,7 +73,6 @@ class MaskedTokenizerCollator:
 
         tokenized["input_ids"] = inputs
         tokenized["labels"] = torch.where(selected, targets, -100)
-        # Unmasked codon ids, used by the GC loss to rebuild the fully-masked (inference) input.
         tokenized["original_ids"] = targets
 
         return tokenized
@@ -144,7 +141,6 @@ class plTrainHarness(pl.LightningModule):
         self.gc_penalty_weight = gc_penalty_weight
         self.motif_penalty_weight = motif_penalty_weight
         self.tokenizer = tokenizer
-        # Total optimizer steps, set by main(); Lightning cannot estimate it for an IterableDataset
         self.total_steps = None
 
         # Augmented-Lagrangian GC Control parameters
@@ -166,29 +162,20 @@ class plTrainHarness(pl.LightningModule):
         self.alm_max_penalty = alm_max_penalty
         self.alm_min_penalty = alm_min_penalty
 
-        # Initialize Lagrangian multiplier as buffer (persists across checkpoints)
+
         self.register_buffer("lambda_gc", torch.tensor(0.0))
-
-        # Adaptive penalty coefficient (rho) - starts as parameter, becomes adaptive
         self.register_buffer("rho_adaptive", torch.tensor(self.lagrangian_rho))
-
-        # Step counter for periodic lambda updates
         self.register_buffer("step_counter", torch.tensor(0))
-
-        # ALM convergence tracking
         self.register_buffer("previous_constraint_violation", torch.tensor(float('inf')))
         self.register_buffer("constraint_violation_history", torch.zeros(10))  # Track last 10 values
         self.register_buffer("alm_iteration_counter", torch.tensor(0))
 
-        # Configure BigBird to use sparse attention (set once to avoid per-step prints)
         if hasattr(self.model, 'bert') and hasattr(self.model.bert, 'set_attention_type'):
             try:
                 self.model.bert.set_attention_type("block_sparse")
             except Exception:
-                # Fallback silently if method missing
                 pass
 
-        # Create GC lookup table for codons
         self._create_gc_lookup_table()
         self._create_motif_lookup_table()
 
@@ -209,8 +196,7 @@ class plTrainHarness(pl.LightningModule):
         synonym_mask = torch.zeros(vocab_size, vocab_size, dtype=torch.bool)
 
         for token, idx in TOKEN2INDEX.items():
-            if idx >= 26:  # codon tokens only; 0-25 are special and "<aa>_unk" tokens
-                # Last three characters are the codon (e.g. "k_aaa" -> "AAA", "__taa" -> "TAA")
+            if idx >= 26: 
                 codon = token[-3:].upper()
                 gc_lookup[idx] = (codon.count('G') + codon.count('C')) / 3.0
                 gc3_lookup[idx] = float(codon[2] in "GC")
@@ -259,7 +245,7 @@ class plTrainHarness(pl.LightningModule):
             counts: [batch_size] number of valid codon positions per row.
         """
         attention_mask = model_inputs["attention_mask"]
-        valid = (original_ids >= 26) & (attention_mask == 1)  # codon positions only
+        valid = (original_ids >= 26) & (attention_mask == 1) 
         masked_ids = self.mask_lookup_tensor[original_ids]
         logits = self.model(
             input_ids=masked_ids,
@@ -276,7 +262,6 @@ class plTrainHarness(pl.LightningModule):
     def _inference_condition_gc(self, probs, seq_index, counts):
         """Per-sequence expected GC and GC3 from the shared inference-conditioned probs."""
         zeros = torch.zeros(counts.shape[0], device=probs.device)
-        # Autocast (16-mixed) would turn these matmuls into half precision; keep the GC maths in float32
         with torch.autocast(device_type=probs.device.type, enabled=False):
             seq_gc = zeros.index_add(0, seq_index, probs @ self.gc_lookup_tensor) / counts
             seq_gc3 = zeros.index_add(0, seq_index, probs @ self.gc3_lookup_tensor) / counts
@@ -298,16 +283,13 @@ class plTrainHarness(pl.LightningModule):
             return torch.zeros((), device=device, dtype=dtype)
 
         with torch.autocast(device_type=device.type, enabled=False):
-            # [num_valid_positions, 3, 4] -> probability of each base at each codon sub-position
             base_probs = (probs @ self.base_onehot_flat).reshape(-1, 3, 4)
-
             total = torch.zeros((), device=device, dtype=dtype)
             for b in range(batch_size):
                 rows = (seq_index == b).nonzero(as_tuple=True)[0]
                 if rows.numel() == 0:
                     continue
-                # Flatten this sequence's codons into one base-probability-per-nucleotide tensor.
-                flat = base_probs[rows].reshape(-1, 4)  # [num_codons * 3, 4]
+                flat = base_probs[rows].reshape(-1, 4) 
                 n_nt = flat.shape[0]
 
                 for motif_bases in self.motif_base_indices:
@@ -328,7 +310,6 @@ class plTrainHarness(pl.LightningModule):
             lr=self.learning_rate,
         )
 
-        # For an IterableDataset Lightning falls back to max_steps (-1 by default), so prefer our own count
         total_steps = self.total_steps or self.trainer.estimated_stepping_batches
         if not (0 < total_steps < float("inf")):
             raise ValueError(f"Cannot size the LR scheduler: total_steps={total_steps}")
@@ -337,9 +318,9 @@ class plTrainHarness(pl.LightningModule):
         lr_scheduler = {
             "scheduler": torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
                 optimizer,
-                T_0=max(1, int(total_steps // 4)),  # First restart after 1/4 of training
-                T_mult=2,  # Double the restart period each time
-                eta_min=self.learning_rate * 0.01,  # Minimum learning rate (1% of max)
+                T_0=max(1, int(total_steps // 4)), 
+                T_mult=2, 
+                eta_min=self.learning_rate * 0.01, 
             ),
             "interval": "step",
             "frequency": 1,
