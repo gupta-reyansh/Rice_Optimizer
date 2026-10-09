@@ -211,7 +211,6 @@ def score_dataset(name: str, sequences: List[str], weights: Dict[str, float]) ->
 
     return {
         "dataset": name,
-        "sequence_count": len(sequences),
         "avg_gc_percent": sum(gc_values) / len(gc_values),
         "avg_gc3_percent": sum(gc3_values) / len(gc3_values),
         "avg_cai": sum(cai_values) / len(cai_values),
@@ -252,7 +251,6 @@ def main() -> None:
         [
             {
                 "dataset": r["dataset"],
-                "sequence_count": r["sequence_count"],
                 "avg_gc_percent": r["avg_gc_percent"],
                 "avg_gc3_percent": r["avg_gc3_percent"],
                 "avg_cai": r["avg_cai"],
