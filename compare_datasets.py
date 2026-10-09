@@ -51,6 +51,14 @@ NIFH_DATA_CSV = LOCAL_NOTEBOOKS_DIR / "nifH_data.csv"
 
 VALID_BASES = set("ATCG")
 
+TARGET_ROW = {
+    "dataset": "target",
+    "avg_gc_percent": 43.51,
+    "avg_gc3_percent": 40.08,
+    "avg_cai": 1,
+    "avg_codon_similarity_to_original_percent": 1,
+}
+
 GENETIC_CODE = {
     "TTT": "F", "TTC": "F", "TTA": "L", "TTG": "L",
     "TCT": "S", "TCC": "S", "TCA": "S", "TCG": "S",
@@ -272,6 +280,7 @@ def main() -> None:
             }
             for r in results
         ]
+        + [TARGET_ROW]
     )
 
     pd.set_option("display.float_format", lambda x: f"{x:.4f}")
