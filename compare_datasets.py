@@ -1,11 +1,12 @@
 """
-Compare codon-optimization metrics across four differently-formatted result sets:
+Compare codon-optimization metrics across five differently-formatted result sets:
 
   1. nif1 + nif2 combined FASTA-style files
      (../Local Notebooks/nifh1.fna, nifh2.fna)
   2. geneious_sequences.csv        (sequence column: "sequence")
   3. idt_processed.csv             (sequence column: "Optimized Sequence")
   4. ModelTest/model_predictions.csv (sequence column: "predicted_dna")
+  5. ModelTest/model_predictions_constrained.csv (same, with constrained sequences)
 
 Metrics (ported from Fasta_to_Metrics.ipynb):
   - get_gc_content
@@ -169,7 +170,7 @@ def load_pairs_idt(path: Path, test_df: pd.DataFrame) -> List[Tuple[str, str]]:
     """idt_processed.csv has no id column; row order matches nifH_data.csv."""
     df = pd.read_csv(path)
     pairs = []
-    for orig, pred in zip(test_df["sequence"], df["Optimized Sequence_motif_free"]):
+    for orig, pred in zip(test_df["sequence"], df["Optimized Sequence"]):
         o, p = clean_coding_sequence(orig), clean_coding_sequence(pred)
         if o and p:
             pairs.append((o, p))
@@ -181,7 +182,7 @@ def load_pairs_geneious(path: Path, test_df: pd.DataFrame) -> List[Tuple[str, st
     df = pd.read_csv(path)
     id_to_original = dict(zip(test_df["id"], test_df["sequence"]))
     pairs = []
-    for desc, pred in zip(df["description"], df["sequence_motif_free"]):
+    for desc, pred in zip(df["description"], df["sequence"]):
         gid = desc.split(" # ")[0]
         orig = id_to_original.get(gid)
         o, p = clean_coding_sequence(orig) if orig else None, clean_coding_sequence(pred)
@@ -226,8 +227,8 @@ def main() -> None:
 
     datasets = {
         "nif1+nif2 (combined)": load_fasta_sequences(NIF_FASTA_FILES),
-        "geneious_sequences.csv": load_csv_column(GENEIOUS_CSV, "sequence_motif_free"),
-        "idt_processed.csv": load_csv_column(IDT_CSV, "Optimized Sequence_motif_free"),
+        "geneious_sequences.csv": load_csv_column(GENEIOUS_CSV, "sequence"),
+        "idt_processed.csv": load_csv_column(IDT_CSV, "Optimized Sequence"),
         "model_predictions.csv": load_csv_column(MODEL_CSV, "predicted_dna"),
         "model_predictions_constrained.csv": load_csv_column(MODEL_CONSTRAINED_CSV, "predicted_dna"),
     }
