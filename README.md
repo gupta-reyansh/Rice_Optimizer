@@ -10,16 +10,17 @@ This project was developed for a science fair and may support future research. I
 
 | Model | Trained on | Hugging Face |
 | --- | --- | --- |
-| **Rice Mitochondria Optimizer** (main) | Rice mitochondrial genomes | [gupta-reyansh123/Rice_Mitochondria_Optimizer](https://huggingface.co/gupta-reyansh123/Rice_Mitochondria_Optimizer) |
+| **Rice Mitochondria Optimizer v2** (main, the "final model") | Rice mitochondrial genes, each a complete coding sequence with start and stop codons | [gupta-reyansh123/Rice_Mitochondria_Optimizer_v2](https://huggingface.co/gupta-reyansh123/Rice_Mitochondria_Optimizer_v2) |
+| Rice Mitochondria Optimizer (earlier version) | Rice mitochondrial genomes cut into ~6 kb sections | [gupta-reyansh123/Rice_Mitochondria_Optimizer](https://huggingface.co/gupta-reyansh123/Rice_Mitochondria_Optimizer) |
 | Rice Nucleic Optimizer (earlier proof of concept) | Rice nuclear cDNA | [gupta-reyansh123/Rice_Nucleic_Optimizer](https://huggingface.co/gupta-reyansh123/Rice_Nucleic_Optimizer) |
 
-Load either one with:
+Load any of them with:
 
 ```python
 from transformers import AutoTokenizer, BigBirdForMaskedLM
 
 tokenizer = AutoTokenizer.from_pretrained("adibvafa/CodonTransformer")
-model = BigBirdForMaskedLM.from_pretrained("gupta-reyansh123/Rice_Mitochondria_Optimizer")
+model = BigBirdForMaskedLM.from_pretrained("gupta-reyansh123/Rice_Mitochondria_Optimizer_v2")
 ```
 
 ## How It Works
@@ -28,13 +29,19 @@ Both models start from the pretrained CodonTransformer and are fine-tuned on ric
 
 <img width="453" height="686" alt="Gemini_Generated_Image_5kvhi95kvhi95kvh" src="https://github.com/user-attachments/assets/b63e7979-22b9-4aa3-aff8-3ca1c4c05d44" />
 
-The mitochondria model adds **GC control** during fine-tuning. An extra loss term pushes the GC content of the predicted sequences toward a target (0.432), and a small penalty discourages negative cis-regulatory motifs. These pieces were combined with the base CodonTransformer training code in [finetune.py](finetune.py).
+The mitochondria models add **GC control** during fine-tuning. An extra loss term pushes the GC content of the predicted sequences toward a target (0.432), and a small penalty discourages negative cis-regulatory motifs. These pieces were combined with the base CodonTransformer training code in [finetune.py](finetune.py).
+
+For the final model, the GC constraint was deliberately **relaxed in favor of 5′ MFE**. GC content and MFE both relate to RNA stability, but MFE measures stability more directly, so the final model trades some GC accuracy for a better-preserved 5′ structure.
 
 ## Data
 
-### Mitochondria (main model)
+### Mitochondria
 
-[Data/Mitochondria.fasta](Data/Mitochondria.fasta) comes from the [NCBI organelle genomes database for rice](https://www.ncbi.nlm.nih.gov/datasets/organelle/?taxon=4530) and contains four mitochondrial genome records: GenBank ON854123.1, RefSeq NC_066488.1, BA000029.3 and NC_011033.1. Each full genome was split into even sections of about 6 kb, giving **264 sequences** (1,613,448 bp in total, 43.9% GC). Because the data are genome sections rather than individual genes, MFE was not calculated for this model.
+The earlier mitochondria models were trained on genome sections. The final model was trained on whole genes instead: splitting the genomes into many small segments gave more data points, but it was the wrong trade, because quality matters more than quantity here. The gene-level set is described second below.
+
+[Data/Mitochondria.fasta](Data/Mitochondria.fasta) (earlier models) comes from the [NCBI organelle genomes database for rice](https://www.ncbi.nlm.nih.gov/datasets/organelle/?taxon=4530) and contains four mitochondrial genome records: GenBank ON854123.1, RefSeq NC_066488.1, BA000029.3 and NC_011033.1. Each full genome was split into even sections of about 6 kb, giving **264 sequences** (1,613,448 bp in total, 43.9% GC).
+
+[Data/Mitochondria_training.fasta](Data/Mitochondria_training.fasta) (final model) is a gene-level set built from the NCBI gene annotation for the two RefSeq genomes (NC_011033.1 and NC_066488.1; the GenBank copies are identical). Each protein-coding gene was cut out of the genome by its annotated coordinates and kept only if it is a complete open reading frame (ATG start, one terminal stop, no internal stops). This gives **69 genes**, 50 of them unique sequences. Fourteen gene families with introns, trans-splicing or RNA-edited starts were left out because their coding sequence cannot be rebuilt from the gene range alone. The source NCBI files (`genome.fna`, `organelle_gene_report.jsonl`, `organelle_report.jsonl`, `protein.faa`, `dataset_catalog.json`) are in [Data/](Data/). This set is also the reference for the CAI weights in the evaluation below.
 
 ### Nucleic (earlier model)
 
@@ -49,7 +56,7 @@ This left **4,452 sequences**.
 
 ## Training
 
-The mitochondria model was fine-tuned from the pretrained CodonTransformer on a single GPU on Google Colab, using [finetune.py](finetune.py) with these settings:
+The mitochondria models were fine-tuned from the pretrained CodonTransformer on a single GPU on Google Colab, using [finetune.py](finetune.py). These are the settings used with full GC control; the final model relaxed the GC constraint in favor of 5′ MFE, so its exact GC settings differ:
 
 ```bash
 python finetune.py \
@@ -82,21 +89,29 @@ The batch workflow uses [ModelTest/nifH_data.csv](ModelTest/nifH_data.csv) as in
 
 ## Evaluation
 
-The mitochondria model's predictions for 100 *nifH* sequences were compared with the native *nifH* sequences and with two industry codon-optimization tools, Geneious and IDT. GenScript was tried first because it has a rice option, but it has no custom codon usage table, so Geneious was used instead. These two tools are a sample of widely used optimizers, not an exhaustive comparison.
+The mitochondria models' predictions for 100 *nifH* sequences were compared with the native *nifH* sequences and with two industry codon-optimization tools, Geneious and IDT. GenScript was tried first because it has a rice option, but it has no custom codon usage table, so Geneious was used instead. These two tools are a sample of widely used optimizers, not an exhaustive comparison.
 
-"Model" is fine-tuned without GC constraints. "Model (constrained)" is fine-tuned with GC control.
+"Unconstrained model" is fine-tuned without GC control, and "Constrained model" is fine-tuned with GC control. "Final model" is [Rice_Mitochondria_Optimizer_v2](https://huggingface.co/gupta-reyansh123/Rice_Mitochondria_Optimizer_v2), trained on the gene-level data with GC control relaxed in favor of 5′ MFE.
 
-| Dataset | GC % | GC3 % | CAI | Codon similarity to original % |
-| --- | --- | --- | --- | --- |
-| Native *nifH* (nif1 + nif2) | 53.28 | 62.57 | 0.764 | n/a |
-| Geneious | 44.71 | 39.58 | 0.825 | 34.51 |
-| IDT | 44.46 | 39.21 | 0.831 | 34.21 |
-| Model | 41.59 | 29.34 | 0.925 | 32.10 |
-| **Model (constrained)** | 44.35 | 37.85 | 0.893 | 38.78 |
+| Dataset | GC % | GC3 % | CAI | Codon similarity to original % | Δ5′ MFE (kcal/mol) |
+| --- | --- | --- | --- | --- | --- |
+| Native *nifH* (nif1 + nif2) | 53.28 | 62.57 | 0.681 | n/a | n/a |
+| Geneious | 44.71 | 39.58 | 0.777 | 34.51 | 0.815 |
+| IDT | 44.46 | 39.21 | 0.781 | 34.21 | 0.652 |
+| Unconstrained model (no GC control) | 41.59 | 29.34 | 0.857 | 32.10 | 1.039 |
+| Constrained model | 44.35 | 37.85 | 0.805 | 38.78 | 2.252 |
+| **Final model** | 41.85 | 31.39 | 0.819 | 38.57 | 0.020 |
+| Target | 43.51 | 40.08 | 1.0 | 1.0 | 0 |
 
-Constraining GC moves the model's GC much closer to the other tools and the native sequences, and its GC3 rises along with it, while CAI stays well above the other tools.
+How the metrics are computed:
 
-- [dataset_comparison_summary.csv](dataset_comparison_summary.csv) holds these numbers. Regenerate it with `python compare_datasets.py`.
+- **CAI** uses relative-adaptiveness weights built from [Data/Mitochondria_training.fasta](Data/Mitochondria_training.fasta); a sequence's score is the geometric mean of its codon weights.
+- **Δ5′ MFE** is the average change in minimum free energy of the first 50 nucleotides, optimized minus original (ViennaRNA, 37 °C). 0 means the native 5′ structure is preserved, and smaller absolute values are better.
+- **Codon similarity** is the codon-level similarity of each optimized sequence to its native original.
+
+The final model preserves the native 5′ RNA structure far better than every other set (0.02 versus 0.65 to 2.25 kcal/mol) and matches the constrained model on codon similarity (38.57 versus 38.78). Its CAI (0.819) is above Geneious, IDT and the constrained model. Its GC and GC3 are lower than the 43.51% and 40.08% targets; this is the intended trade-off from relaxing GC control in favor of MFE. These results come from a single gene family (*nifH*) and 100 sequences.
+
+- [dataset_comparison_summary.csv](dataset_comparison_summary.csv) holds these numbers. Regenerate it with `python compare_datasets.py`; the final model's predictions come from `python predict_checkpoint.py`.
 - [ModelEvaluation/Rice_Mitochondria_Model/](ModelEvaluation/Rice_Mitochondria_Model/) has the charts for the mitochondria model.
 - [ModelEvaluation/Rice_Nucleic_Model/](ModelEvaluation/Rice_Nucleic_Model/) has the charts for the nucleic model.
 - [ModelTest/](ModelTest/) has the test sequences and predictions.
@@ -111,8 +126,9 @@ Constraining GC moves the model's GC much closer to the other tools and the nati
 | [finetune_species_model.py](finetune_species_model.py) | Fine-tune a single species directly from a FASTA file |
 | [train_species_model.py](train_species_model.py) | Train a single-species model from scratch |
 | [pretrain.py](pretrain.py) | Pretraining workflow |
-| [compare_datasets.py](compare_datasets.py) | Compute GC, GC3, CAI and similarity for each dataset |
-| [Data/](Data/) | Training FASTA files and the Geneious and IDT outputs |
+| [compare_datasets.py](compare_datasets.py) | Compute GC, GC3, CAI, codon similarity and Δ5′ MFE for each dataset |
+| [predict_checkpoint.py](predict_checkpoint.py) | Run a Lightning checkpoint on the test sequences and write predictions |
+| [Data/](Data/) | Training FASTA files, NCBI source files, and the Geneious and IDT outputs |
 | [ModelTest/](ModelTest/) | Test data and model predictions |
 | [ModelEvaluation/](ModelEvaluation/) | Comparison charts |
 | [Docs/](Docs/) | Third-party documentation (see below) |

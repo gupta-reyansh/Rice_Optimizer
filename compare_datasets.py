@@ -25,7 +25,7 @@ Pairing of "original" -> "optimized" sequence for the similarity metric:
   - idt_processed.csv            : row order matches ../Local Notebooks/nifH_data.csv
   - geneious_sequences.csv       : "description" id prefix matches nifH_data.csv["id"]
   - unconstrained model(No gc control) : own "sequence" column is the original
-  - model_predictions_constrained.csv : same as above
+  - constrained model : same as above
   - nif1+nif2 (combined)         : native sequences themselves, no pairing (N/A)
 """
 
@@ -277,7 +277,7 @@ def main() -> None:
         "geneious_sequences.csv": load_csv_column(GENEIOUS_CSV, "sequence"),
         "idt_processed.csv": load_csv_column(IDT_CSV, "Optimized Sequence"),
         "unconstrained model(No gc control)": load_csv_column(MODEL_CSV, "predicted_dna"),
-        "model_predictions_constrained.csv": load_csv_column(MODEL_CONSTRAINED_CSV, "predicted_dna"),
+        "constrained model": load_csv_column(MODEL_CONSTRAINED_CSV, "predicted_dna"),
         "final model": load_csv_column(RICE_MITO_CSV, "predicted_dna"),
     }
 
@@ -286,7 +286,7 @@ def main() -> None:
         "geneious_sequences.csv": load_pairs_geneious(GENEIOUS_CSV, test_df),
         "idt_processed.csv": load_pairs_idt(IDT_CSV, test_df),
         "unconstrained model(No gc control)": load_pairs_from_model_csv(MODEL_CSV),
-        "model_predictions_constrained.csv": load_pairs_from_model_csv(MODEL_CONSTRAINED_CSV),
+        "constrained model": load_pairs_from_model_csv(MODEL_CONSTRAINED_CSV),
         "final model": load_pairs_from_model_csv(RICE_MITO_CSV),
     }
 
