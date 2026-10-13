@@ -78,7 +78,7 @@ To train a single-species model from a FASTA file, see [Docs/Single_Species_Retr
 
 Use [ModelDemo.ipynb](ModelDemo.ipynb). It lets you pick the mitochondria model (default) or the nucleic model, then supports single-sequence and batch prediction.
 
-The batch workflow uses [ModelTest/nifH_data.csv](ModelTest/nifH_data.csv) as input and writes predictions to [ModelTest/model_predictions.csv](ModelTest/model_predictions.csv). The output includes a `predicted_dna` column.
+The batch workflow uses [ModelTest/nifH_data.csv](ModelTest/nifH_data.csv) as input and writes predictions to [ModelTest/rice_mito_predictions.csv](ModelTest/rice_mito_predictions.csv) (mitochondria model) or [ModelTest/rice_nucleic_predictions.csv](ModelTest/rice_nucleic_predictions.csv) (nucleic model). The output includes a `predicted_dna` column.
 
 ## Evaluation
 

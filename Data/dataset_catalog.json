@@ -1,0 +1,33 @@
+{
+  "assemblies": [
+    {
+      "files": [
+        {
+          "filePath": "organelle_report.jsonl",
+          "fileType": "DATA_REPORT",
+          "uncompressedLengthBytes": "1030"
+        }
+      ]
+    }
+  ],
+  "genes": {
+    "files": [
+      {
+        "filePath": "organelle_gene_report.jsonl",
+        "fileType": "DATA_REPORT",
+        "uncompressedLengthBytes": "75831"
+      },
+      {
+        "filePath": "genome.fna",
+        "fileType": "GENOMIC_NUCLEOTIDE_FASTA",
+        "uncompressedLengthBytes": "1923186"
+      },
+      {
+        "filePath": "protein.faa",
+        "fileType": "PROTEIN_FASTA",
+        "uncompressedLengthBytes": "32703"
+      }
+    ]
+  },
+  "apiVersion": "V2"
+}
