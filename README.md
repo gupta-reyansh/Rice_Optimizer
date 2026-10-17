@@ -27,8 +27,6 @@ model = BigBirdForMaskedLM.from_pretrained("gupta-reyansh123/Rice_Mitochondria_O
 
 Both models start from the pretrained CodonTransformer and are fine-tuned on rice coding sequences. The model reads the whole sequence rather than picking codons one at a time, so its predictions reflect patterns learned from complete genes.
 
-<img width="453" height="686" alt="Gemini_Generated_Image_5kvhi95kvhi95kvh" src="https://github.com/user-attachments/assets/b63e7979-22b9-4aa3-aff8-3ca1c4c05d44" />
-
 The mitochondria models add **GC control** during fine-tuning. An extra loss term pushes the GC content of the predicted sequences toward a target (0.432), and a small penalty discourages negative cis-regulatory motifs. These pieces were combined with the base CodonTransformer training code in [finetune.py](finetune.py).
 
 For the final model, the GC constraint was deliberately **relaxed in favor of 5′ MFE**. GC content and MFE both relate to RNA stability, but MFE measures stability more directly, so the final model trades some GC accuracy for a better-preserved 5′ structure.
