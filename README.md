@@ -35,9 +35,7 @@ For the final model, the GC constraint was deliberately **relaxed in favor of 5â
 
 ### Mitochondria
 
-The earlier mitochondria models were trained on genome sections. The final model was trained on whole genes instead: splitting the genomes into many small segments gave more data points, but it was the wrong trade, because quality matters more than quantity here. The gene-level set is described second below.
-
-[Data/Mitochondria.fasta](Data/Mitochondria.fasta) (earlier models) comes from the [NCBI organelle genomes database for rice](https://www.ncbi.nlm.nih.gov/datasets/organelle/?taxon=4530) and contains four mitochondrial genome records: GenBank ON854123.1, RefSeq NC_066488.1, BA000029.3 and NC_011033.1. Each full genome was split into even sections of about 6 kb, giving **264 sequences** (1,613,448 bp in total, 43.9% GC).
+The earlier mitochondria models were trained on genome sections. The final model was trained on whole genes instead: splitting the genomes into many small segments gave more data points, but it was the wrong trade, because quality matters more than quantity here. The gene-level set is described below.
 
 [Data/Mitochondria_training.fasta](Data/Mitochondria_training.fasta) (final model) is a gene-level set built from the NCBI gene annotation for the two RefSeq genomes (NC_011033.1 and NC_066488.1; the GenBank copies are identical). Each protein-coding gene was cut out of the genome by its annotated coordinates and kept only if it is a complete open reading frame (ATG start, one terminal stop, no internal stops). This gives **69 genes**, 50 of them unique sequences. Fourteen gene families with introns, trans-splicing or RNA-edited starts were left out because their coding sequence cannot be rebuilt from the gene range alone. The source NCBI files (`genome.fna`, `organelle_gene_report.jsonl`, `organelle_report.jsonl`, `protein.faa`, `dataset_catalog.json`) are in [Data/](Data/). This set is also the reference for the CAI weights in the evaluation below.
 
